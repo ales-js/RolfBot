@@ -1,0 +1,12 @@
+{
+  "dependencies": {
+    "discord.js": "^14.19.2",
+    "express": "^5.1.0",
+    "systeminformation": "^5.27.7"
+  },
+  "name": "rolfbot",
+  "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "main": "index.js"
+}

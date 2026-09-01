@@ -1,0 +1,10 @@
+{
+  "token": "REPLACE_ME",
+  "clientId": "REPLACE_ME",
+  "guildId": "REPLACE_ME",
+  "ownerId": "REPLACE_ME",
+  "version": "REPLACE_ME",
+  "welcomeChannelId": "REPLACE_ME",
+  "leaveChannelId": "REPLACE_ME",
+  "boostChannelId": "REPLACE_ME"
+}
