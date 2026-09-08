@@ -108,7 +108,7 @@
     {
       "id": "republikflucht",
       "name": "Republikflucht",
-      "description": "Successfully use ?crime and ?rob within 60 seconds of each other.",
+      "description": "Successfully use `?crime` and `?rob` within 60 seconds of each other.",
       "difficulty": "Moderate",
       "show_progress": false,
       "image_url": "",
@@ -126,7 +126,7 @@
     {
       "id": "5_yr_plan_failed",
       "name": "Five Year Plan Failed",
-      "description": "Win Platinum in ?slots, then lose your next 5 slot games in a row.",
+      "description": "Win Platinum in `?slots`, then lose your next 5 slot games in a row.",
       "difficulty": "Extremely Difficult",
       "show_progress": false,
       "image_url": "",

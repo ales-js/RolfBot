@@ -99,7 +99,7 @@ function startStatusRotation(readyClient) {
           type: ActivityType.Listening
         }
       ],
-      status: 'online'
+      status: 'dnd'
     });
 
     console.log(`[STATUS INFO]: Listening to ${status}`);
