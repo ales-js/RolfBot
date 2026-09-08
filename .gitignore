@@ -3,3 +3,9 @@ node_modules/
 config.json
 xp.json
 *.log
+economy.json
+economy.json.tmp
+economy_removed_users.jsonl
+xp.before-total-xp-*.json
+status.json
+*.zip

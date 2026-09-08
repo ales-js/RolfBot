@@ -1,0 +1,58 @@
+{
+  "items": [
+    {
+      "id": "robbing_immunity",
+      "name": "Robbing Immunity Role",
+      "description": "-# a permanent role that makes you unable to be robbed.\n-# you should automatically receive this role after purchasing. otherwise, open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718",
+      "price": 2500,
+      "emoji": "🛡️",
+      "category": "Roles",
+      "enabled": true
+    },
+    {
+      "id": "staatsfeind",
+      "name": "Staatsfeind Role",
+      "description": "-# a permanent role that decreases the chance of you getting fined when using `?crime` and `?rob` by 25%.\n-# you should automatically receive this role after purchasing. otherwise, open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718",
+      "price": 5000,
+      "emoji": "🏴",
+      "category": "Roles",
+      "enabled": true
+    },
+    {
+      "id": "income_1000",
+      "name": "1000 Daily Income Role",
+      "description": "-# a permanent role that has a daily income of 1000, using `?collect`\n-# you should automatically receive this role after purchasing. otherwise, open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718",
+      "price": 7500,
+      "emoji": "💶",
+      "category": "Roles",
+      "enabled": true
+    },
+    {
+      "id": "custom_role_10k",
+      "name": "Custom Role (Name and Non-Gradient Color)",
+      "description": "-# a permanent custom role with a name and non-gradient color of your choice.\n-# after purchasing this item, make sure to open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718 to redeem it.",
+      "price": 10000,
+      "emoji": "✨",
+      "category": "Roles",
+      "enabled": true
+    },
+    {
+      "id": "custom_role_25k",
+      "name": "Custom Role (Name and Color Gradient)",
+      "description": "-# a permanent custom role with a name and color gradient of your choice.\n-# after purchasing this item, make sure to open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718 to redeem it.",
+      "price": 25000,
+      "emoji": "⭐",
+      "category": "Roles",
+      "enabled": true
+    },
+    {
+      "id": "custom_role_50k",
+      "name": "Custom Role (Name, Color Gradient and Role Icon)",
+      "description": "-# a permanent custom role with a name, color gradient and role icon of your choice.\n-# after purchasing this item, make sure to open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718 to redeem it.",
+      "price": 50000,
+      "emoji": "🌟",
+      "category": "Roles",
+      "enabled": true
+    }
+  ]
+}

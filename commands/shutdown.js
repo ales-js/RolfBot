@@ -13,19 +13,18 @@ module.exports = {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('confirm_shutdown')
-        .setLabel('confirm shutdown')
+        .setLabel('Shut Down')
         .setStyle(ButtonStyle.Danger),
 
       new ButtonBuilder()
         .setCustomId('cancel_shutdown')
-        .setLabel('cancel shutdown')
+        .setLabel('Cancel')
         .setStyle(ButtonStyle.Secondary)
     );
 
     await interaction.reply({
-      content: 'confirm shutdown',
-      components: [row],
-      ephemeral: true
+      content: 'are you sure?',
+      components: [row]
     });
 
     const filter = i =>
@@ -36,7 +35,7 @@ module.exports = {
 
     collector.on('collect', async i => {
       if (i.customId === 'confirm_shutdown') {
-        await i.update({ content: 'shutting down', components: [] });
+        await i.update({ content: 'Shutting Down RolfBot...', components: [] });
         console.log('[ADMIN ACTION]: Shutdown confirmed by owner; shutting down');
         await client.destroy();
         process.exit();
