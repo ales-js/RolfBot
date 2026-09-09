@@ -23,12 +23,12 @@ const {
 } = require('discord.js');
 const {
   work_success: workResponses,
-  work_cooldown: workCooldownResponses,
-  crime_success: crimeSuccessResponses,
+  work_cooldown: workCdResponses,
+  crime_success: crimeWinResponses,
   crime_fail: crimeFailResponses,
-  crime_cooldown: crimeCooldownResponses,
+  crime_cooldown: crimeCdResponses,
   beg_success: begResponses,
-  beg_cooldown: begCooldownResponses
+  beg_cooldown: begCdResponses
 } = require('./economy_responses.json');
 
 const economyFile = path.join(__dirname, 'economy.json');
@@ -38,11 +38,11 @@ const commandPrefix = '?';
 const failEmbedColor = '#ff5050';
 const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-const commandRepeatCooldownMilliseconds = 500;
-const commandCooldowns = new Map();
-const economyCleanupClients = new WeakSet();
-const economyCleanupRunning = new Set();
-const economyCleanupIntervalMilliseconds = 60 * 60 * 1000;
+const repeatCdMs = 500;
+const cmdCooldowns = new Map();
+const cleanupClients = new WeakSet();
+const cleanupRunning = new Set();
+const cleanupIntervalMs = 60 * 60 * 1000;
 
 const workConfig = {
   minimumPay: 250,
@@ -74,10 +74,10 @@ const begConfig = {
   cooldownMinutes: 15
 };
 
-const dailyIncomeTimeZone = 'Europe/Berlin';
+const incomeTz = 'Europe/Berlin';
 
-const dailyIncomeDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
-  timeZone: dailyIncomeTimeZone,
+const incomeDateFmt = new Intl.DateTimeFormat('en-US', {
+  timeZone: incomeTz,
   year: 'numeric',
   month: '2-digit',
   day: '2-digit',
@@ -87,7 +87,7 @@ const dailyIncomeDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
   hourCycle: 'h23'
 });
 
-const leaderboardConfig = {
+const lbConfig = {
   usersPerPage: 10,
   buttonTimeoutMinutes: 2
 };
@@ -103,7 +103,7 @@ const shopConfig = {
   maximumCategories: 24
 };
 
-const achievementConfig = {
+const achConfig = {
   achievementsPerPage: 7,
   buttonTimeoutMinutes: 2
 };
@@ -192,8 +192,8 @@ const statisticNames = [
   'most_expensive_shop_purchase'
 ];
 
-const robbingImmunityItemId = 'robbing_immunity';
-const robbingImmunityRoleId = '1536497693550190602';
+const robImmunityItemId = 'robbing_immunity';
+const robImmunityRoleId = '1536497693550190602';
 const staatsfeindItemId = 'staatsfeind';
 const staatsfeindRoleId = '1545443722613756004';
 const income1000ItemId = 'income_1000';
@@ -201,7 +201,7 @@ const income1000RoleId = '1533228759262560256';
 const staatsfeindSuccessChanceBoost = 25;
 
 const shopRoleIds = new Map([
-  [robbingImmunityItemId, robbingImmunityRoleId],
+  [robImmunityItemId, robImmunityRoleId],
   [staatsfeindItemId, staatsfeindRoleId],
   [income1000ItemId, income1000RoleId],
 ]);
@@ -400,7 +400,8 @@ const leaderboardCategoryAliases = new Map([
   ['cash', 'wallet'],
   ['bank', 'bank'],
   ['debt', 'debt'],
-  ['debts', 'debt']
+  ['debts', 'debt'],
+  ...statisticNames.map(name => [name, name])
 ]);
 
 const settingsAliases = new Set(['settings', 'setting', 'options', 'option']);
@@ -449,7 +450,7 @@ const commandUsage = {
   collect: '`?collect`',
   slots: '`?slots [ amount | all | half | quarter ]`',
   roulette: '`?roulette [ amount | all | half | quarter ] [ space ]`',
-  leaderboard: '`?leaderboard [ total | wallet | bank | debt | level ]`',
+  leaderboard: '`?leaderboard [ total | wallet | bank | debt | level | stat | list ]`',
   shop: '`?shop`',
   achievements: '`?achievements`',
   stats: '`?stats`',
@@ -495,8 +496,8 @@ const adminMessages = {
     return `<@${userId}> - **${pocket}**\n${currencyEmoji}${formatMoney(previous)} -> ${currencyEmoji}**${formatMoney(next)}**`;
   },
 
-  statisticUpdated(userId, statisticName, previous, next) {
-    return `<@${userId}> - \`${statisticName}\`\n${formatStatisticValue(statisticName, previous)} -> ${formatStatisticValue(statisticName, next)}\n\n${this.statsNote}`;
+  statisticUpdated(userId, statName, previous, next) {
+    return `<@${userId}> - \`${statName}\`\n${formatStatisticValue(statName, previous)} -> ${formatStatisticValue(statName, next)}\n\n${this.statsNote}`;
   },
 
   statisticsReset(userId) {
@@ -597,8 +598,7 @@ const helpCommandEntries = [
   },
   {
     usage: commandUsage.leaderboard,
-    description: 'View users by total, wallet, bank, or debt. ' +
-      `For the level leaderboard, use: ${[...levelAliases].map(alias => '\`' + alias + '\`').join(', ')}.`,
+    description: 'View users by total, wallet, bank, debt, or any tracked statistic.',
     aliases: leaderboardAliases
   },
   {
@@ -674,7 +674,7 @@ const economyMessages = {
   }
 };
 
-const leaderboardText = {
+const lbText = {
   categoryNames: {
     total: 'Total Money',
     wallet: 'Wallet',
@@ -684,7 +684,7 @@ const leaderboardText = {
   emptyLeaderboard: 'err empty db'
 };
 
-const leaderboardButtonIds = {
+const lbButtonIds = {
   first: 'economy_leaderboard_first',
   previous: 'economy_leaderboard_previous',
   page: 'economy_leaderboard_page_number',
@@ -700,7 +700,7 @@ const helpButtonIds = {
   last: 'economy_help_last'
 };
 
-const achievementButtonIds = {
+const achButtonIds = {
   first: 'economy_achievement_first',
   previous: 'economy_achievement_previous',
   page: 'economy_achievement_page_number',
@@ -732,29 +732,29 @@ function formatAliases(aliases) {
   return Array.from(aliases, (alias) => `\`?${alias}\``).join(', ');
 }
 
-function getEconomyCommandKey(commandName) {
-  for (const [commandKey, aliases] of commandAliasGroups) {
-    if (aliases.has(commandName)) {
-      return commandKey;
+function getEconomyCommandKey(cmdName) {
+  for (const [cmdKey, aliases] of commandAliasGroups) {
+    if (aliases.has(cmdName)) {
+      return cmdKey;
     }
   }
   return null;
 }
 
-function useCommandRepeatCooldown(message, commandKey) {
-  const cooldownKey = `${message.guild.id}:${message.author.id}:${commandKey}`;
+function useCommandRepeatCooldown(message, cmdKey) {
+  const cooldownKey = `${message.guild.id}:${message.author.id}:${cmdKey}`;
   const now = Date.now();
-  const currentCooldownEndsAt = commandCooldowns.get(cooldownKey) || 0;
-  if (now < currentCooldownEndsAt) {
-    return currentCooldownEndsAt - now;
+  const cdEndsAt = cmdCooldowns.get(cooldownKey) || 0;
+  if (now < cdEndsAt) {
+    return cdEndsAt - now;
   }
-  const nextCooldownEndsAt = now + commandRepeatCooldownMilliseconds;
-  commandCooldowns.set(cooldownKey, nextCooldownEndsAt);
+  const nextCdEnd = now + repeatCdMs;
+  cmdCooldowns.set(cooldownKey, nextCdEnd);
   const cleanupTimeout = setTimeout(() => {
-    if (commandCooldowns.get(cooldownKey) === nextCooldownEndsAt) {
-      commandCooldowns.delete(cooldownKey);
+    if (cmdCooldowns.get(cooldownKey) === nextCdEnd) {
+      cmdCooldowns.delete(cooldownKey);
     }
-  }, commandRepeatCooldownMilliseconds);
+  }, repeatCdMs);
   cleanupTimeout.unref?.();
   return 0;
 }
@@ -774,11 +774,11 @@ function createPageModal(customId, totalPages) {
 }
 
 function getPageFromModal(interaction, totalPages) {
-  const requestedPage = interaction.fields.getTextInputValue('page_number').trim();
-  if (!/^-?\d+$/.test(requestedPage)) {
+  const reqPage = interaction.fields.getTextInputValue('page_number').trim();
+  if (!/^-?\d+$/.test(reqPage)) {
     return null;
   }
-  const pageNumber = BigInt(requestedPage);
+  const pageNumber = BigInt(reqPage);
   if (pageNumber < 1n) {
     return 0;
   }
@@ -834,7 +834,7 @@ function createPaginationButtons(buttonIds, currentPage, totalPages, disableAll 
 
 function createLeaderboardButtons(currentPage, totalPages, disableAll = false) {
   return createPaginationButtons(
-    leaderboardButtonIds,
+    lbButtonIds,
     currentPage,
     totalPages,
     disableAll
@@ -847,7 +847,7 @@ function createHelpButtons(currentPage, totalPages, disableAll = false) {
 
 function createAchievementButtons(currentPage, totalPages, disableAll = false) {
   return createPaginationButtons(
-    achievementButtonIds,
+    achButtonIds,
     currentPage,
     totalPages,
     disableAll
@@ -877,37 +877,37 @@ function getShopCategories(shopItems) {
   return [...new Set(shopItems.map((item) => item.category))];
 }
 
-function getShopItemsForCategory(shopItems, selectedCategory) {
-  return selectedCategory === 'all'
+function getShopItemsForCategory(shopItems, selectedCat) {
+  return selectedCat === 'all'
     ? shopItems
-    : shopItems.filter((item) => item.category === selectedCategory);
+    : shopItems.filter((item) => item.category === selectedCat);
 }
 
-function getShopPageCount(shopItems, selectedCategory) {
-  const visibleItems = getShopItemsForCategory(shopItems, selectedCategory);
+function getShopPageCount(shopItems, selectedCat) {
+  const visibleItems = getShopItemsForCategory(shopItems, selectedCat);
   return Math.max(1, Math.ceil(visibleItems.length / shopConfig.itemsPerPage));
 }
 
-function clampShopPage(page, shopItems, selectedCategory) {
-  return Math.min(Math.max(page, 0), getShopPageCount(shopItems, selectedCategory) - 1);
+function clampShopPage(page, shopItems, selectedCat) {
+  return Math.min(Math.max(page, 0), getShopPageCount(shopItems, selectedCat) - 1);
 }
 
-function createShopCategoryMenu(shopItems, selectedCategory, disableAll = false) {
+function createShopCategoryMenu(shopItems, selectedCat, disableAll = false) {
   const categories = getShopCategories(shopItems);
   const menu = new StringSelectMenuBuilder()
     .setCustomId('economy_shop_category')
-    .setPlaceholder(selectedCategory === 'all' ? 'All Categories' : selectedCategory)
+    .setPlaceholder(selectedCat === 'all' ? 'All Categories' : selectedCat)
     .setDisabled(disableAll)
     .addOptions(
       new StringSelectMenuOptionBuilder()
         .setLabel('All Categories')
         .setValue('all')
-        .setDefault(selectedCategory === 'all'),
+        .setDefault(selectedCat === 'all'),
       ...categories.map((category) =>
         new StringSelectMenuOptionBuilder()
           .setLabel(category)
           .setValue(category)
-          .setDefault(selectedCategory === category)
+          .setDefault(selectedCat === category)
       )
     );
   return new ActionRowBuilder().addComponents(menu);
@@ -916,13 +916,13 @@ function createShopCategoryMenu(shopItems, selectedCategory, disableAll = false)
 function createShopComponents(
   account,
   shopItems,
-  selectedCategory = 'all',
+  selectedCat = 'all',
   page = 0,
   disableAll = false
 ) {
-  const visibleItems = getShopItemsForCategory(shopItems, selectedCategory);
-  const totalPages = getShopPageCount(shopItems, selectedCategory);
-  const currentPage = clampShopPage(page, shopItems, selectedCategory);
+  const visibleItems = getShopItemsForCategory(shopItems, selectedCat);
+  const totalPages = getShopPageCount(shopItems, selectedCat);
+  const currentPage = clampShopPage(page, shopItems, selectedCat);
   const firstItemIndex = currentPage * shopConfig.itemsPerPage;
   const pageItems = visibleItems.slice(
     firstItemIndex,
@@ -978,7 +978,7 @@ function createShopComponents(
   }
   const components = [
     container,
-    createShopCategoryMenu(shopItems, selectedCategory, disableAll)
+    createShopCategoryMenu(shopItems, selectedCat, disableAll)
   ];
   if (totalPages > 1) {
     components.push(createShopButtons(currentPage, totalPages, disableAll));
@@ -1022,27 +1022,27 @@ function formatDailyIncomeRoles(incomeRoles) {
     .join('\n');
 }
 
-function formatStatisticName(statisticName) {
-  const words = statisticName.replaceAll('_', ' ');
+function formatStatisticName(statName) {
+  const words = statName.replaceAll('_', ' ');
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-function isMoneyStatistic(statisticName) {
+function isMoneyStatistic(statName) {
   return (
-    statisticName.startsWith('money_') ||
-    statisticName.startsWith('largest_') ||
-    statisticName === 'slots_wagered' ||
-    statisticName === 'slots_payouts' ||
-    statisticName === 'roulette_wagered' ||
-    statisticName === 'roulette_payouts' ||
-    statisticName === 'shop_money_spent' ||
-    statisticName === 'most_expensive_shop_purchase'
+    statName.startsWith('money_') ||
+    statName.startsWith('largest_') ||
+    statName === 'slots_wagered' ||
+    statName === 'slots_payouts' ||
+    statName === 'roulette_wagered' ||
+    statName === 'roulette_payouts' ||
+    statName === 'shop_money_spent' ||
+    statName === 'most_expensive_shop_purchase'
   );
 }
 
-function formatStatisticValue(statisticName, value) {
+function formatStatisticValue(statName, value) {
   const formattedValue = formatMoney(value);
-  return isMoneyStatistic(statisticName)
+  return isMoneyStatistic(statName)
     ? `${currencyEmoji}**${formattedValue}**`
     : `**${formattedValue}**`;
 }
@@ -1091,10 +1091,10 @@ function createAchievementComponents(
       achievementOwners.set(id, (achievementOwners.get(id) || 0) + 1);
     }
   }
-  const startIndex = currentPage * achievementConfig.achievementsPerPage;
+  const startIndex = currentPage * achConfig.achievementsPerPage;
   const pageAchievements = achievements.slice(
     startIndex,
-    startIndex + achievementConfig.achievementsPerPage
+    startIndex + achConfig.achievementsPerPage
   );
   const unlockedIds = new Set(account.achievements);
   const unlockedCount = achievements.filter((achievement) =>
@@ -1221,10 +1221,10 @@ const economyEmbeds = {
       .setTimestamp();
   },
 
-  commandRepeatCooldown(message, commandKey, remainingMilliseconds) {
+  commandRepeatCooldown(message, cmdKey, remainingMilliseconds) {
     const remainingSeconds = Math.ceil(remainingMilliseconds / 100) / 10;
     return createEconomyEmbed(message, failEmbedColor).setDescription(
-      `You're using \`?${commandKey}\` too quickly. ` +
+      `You're using \`?${cmdKey}\` too quickly. ` +
         `Please wait **${remainingSeconds} second${remainingSeconds === 1 ? '' : 's'}**.`
     );
   },
@@ -1251,15 +1251,17 @@ const economyEmbeds = {
       [
         `Incorrect usage! \`${suppliedCategory}\` isn't a valid leaderboard category.`,
         '**correct usage:**',
-        commandUsage.leaderboard
+        commandUsage.leaderboard,
+        'Use `?lb list` to see every category.'
       ].join('\n')
     );
   },
 
   leaderboard(message, account, entries, category, currentPage, totalPages) {
-    const categoryName = category === 'level' ? 'Level' : leaderboardText.categoryNames[category];
-    const startIndex = currentPage * leaderboardConfig.usersPerPage;
-    const pageEntries = entries.slice(startIndex, startIndex + leaderboardConfig.usersPerPage);
+    const categoryName = category === 'level' ? 'Level' :
+      lbText.categoryNames[category] || formatStatisticName(category);
+    const startIndex = currentPage * lbConfig.usersPerPage;
+    const pageEntries = entries.slice(startIndex, startIndex + lbConfig.usersPerPage);
     const description =
       pageEntries.length > 0
         ? pageEntries
@@ -1269,6 +1271,9 @@ const economyEmbeds = {
               const badgePrefix = entry.badges ? `${entry.badges} ` : '';
               if (category === 'level') {
                 return `**${rank}.** ${badgePrefix}<@${entry.userId}> · \`Lv. ${entry.level}\` · \`${formatXp(entry.xp)} XP\`${youMarker}`;
+              }
+              if (statisticNames.includes(category)) {
+                return `**${rank}.** ${badgePrefix}<@${entry.userId}> · ${formatStatisticValue(category, entry.value)}${youMarker}`;
               }
               return (
                 `**${rank}.** ${badgePrefix}<@${entry.userId}>` +
@@ -1281,7 +1286,7 @@ const economyEmbeds = {
           ? 'No XP data yet.'
           : category === 'debt'
             ? 'Nobody is currently in debt.'
-            : leaderboardText.emptyLeaderboard;
+            : lbText.emptyLeaderboard;
     const yourRank = entries.findIndex((entry) => entry.userId === message.author.id) + 1;
     return createEconomyEmbed(message, account.settings.embedColor)
       .setTitle(`${categoryName} Leaderboard`)
@@ -1339,10 +1344,10 @@ const economyEmbeds = {
       startIndex + statsConfig.statisticsPerPage
     );
     const description = pageStatisticNames
-      .map((statisticName) => {
-        const value = account.achievementStats[statisticName] || 0;
-        return `${formatStatisticName(statisticName)}: ${formatStatisticValue(
-          statisticName,
+      .map((statName) => {
+        const value = account.achievementStats[statName] || 0;
+        return `${formatStatisticName(statName)}: ${formatStatisticValue(
+          statName,
           value
         )}`;
       })
@@ -1359,10 +1364,10 @@ const economyEmbeds = {
   },
 
   achievements(message, account, achievements, currentPage, totalPages) {
-    const startIndex = currentPage * achievementConfig.achievementsPerPage;
+    const startIndex = currentPage * achConfig.achievementsPerPage;
     const pageAchievements = achievements.slice(
       startIndex,
-      startIndex + achievementConfig.achievementsPerPage
+      startIndex + achConfig.achievementsPerPage
     );
     const unlockedIds = new Set(account.achievements);
     const unlockedCount = achievements.filter((achievement) =>
@@ -2510,9 +2515,9 @@ function getAccount(data, guildId, userId, member) {
   if (!account.achievementStats || typeof account.achievementStats !== 'object') {
     account.achievementStats = {};
   }
-  for (const [statisticName, value] of Object.entries(account.achievementStats)) {
+  for (const [statName, value] of Object.entries(account.achievementStats)) {
     if (!Number.isSafeInteger(value) || value < 0) {
-      delete account.achievementStats[statisticName];
+      delete account.achievementStats[statName];
     }
   }
   if (!account.settings || typeof account.settings !== 'object') {
@@ -2524,18 +2529,18 @@ function getAccount(data, guildId, userId, member) {
   return account;
 }
 
-function incrementAchievementStatistic(account, statisticName, amount = 1) {
-  const currentValue = Number.isSafeInteger(account.achievementStats[statisticName])
-    ? account.achievementStats[statisticName]
+function incrementAchievementStatistic(account, statName, amount = 1) {
+  const currentValue = Number.isSafeInteger(account.achievementStats[statName])
+    ? account.achievementStats[statName]
     : 0;
-  account.achievementStats[statisticName] = currentValue + amount;
+  account.achievementStats[statName] = currentValue + amount;
 }
 
-function setMaximumAchievementStatistic(account, statisticName, value) {
-  const currentValue = Number.isSafeInteger(account.achievementStats[statisticName])
-    ? account.achievementStats[statisticName]
+function setMaximumAchievementStatistic(account, statName, value) {
+  const currentValue = Number.isSafeInteger(account.achievementStats[statName])
+    ? account.achievementStats[statName]
     : 0;
-  account.achievementStats[statisticName] = Math.max(currentValue, value);
+  account.achievementStats[statName] = Math.max(currentValue, value);
 }
 
 function recordMoneyEarned(account, source, amount) {
@@ -2735,6 +2740,10 @@ async function checkAndAnnounceAchievements(message) {
 }
 
 function getLeaderboardValue(account, category) {
+  if (statisticNames.includes(category)) {
+    const value = account?.achievementStats?.[category];
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  }
   const wallet = Number.isFinite(account?.wallet) ? account.wallet : 0;
   const bank = Number.isFinite(account?.bank) ? account.bank : 0;
   if (category === 'wallet') {
@@ -2817,8 +2826,8 @@ async function resolveTargetMember(message, args) {
 
 function hasRobbingImmunity(member, account) {
   return (
-    member.roles.cache.has(robbingImmunityRoleId) ||
-    account.ownedItems.includes(robbingImmunityItemId)
+    member.roles.cache.has(robImmunityRoleId) ||
+    account.ownedItems.includes(robImmunityItemId)
   );
 }
 
@@ -2855,7 +2864,7 @@ function getDailyIncomeRoles(member) {
 
 function getDailyIncomeDateTimeParts(timestamp) {
   const dateTimeParts = {};
-  for (const part of dailyIncomeDateTimeFormatter.formatToParts(new Date(timestamp))) {
+  for (const part of incomeDateFmt.formatToParts(new Date(timestamp))) {
     if (part.type !== 'literal') {
       dateTimeParts[part.type] = Number(part.value);
     }
@@ -3319,15 +3328,15 @@ async function showHelp(message) {
           if (!modalInteraction) {
             return;
           }
-          const requestedPage = getPageFromModal(modalInteraction, totalPages);
-          if (requestedPage === null) {
+          const reqPage = getPageFromModal(modalInteraction, totalPages);
+          if (reqPage === null) {
             await modalInteraction.reply({
               content: 'Please enter a whole page number.',
               flags: MessageFlags.Ephemeral
             });
             return;
           }
-          currentPage = requestedPage;
+          currentPage = reqPage;
           pageInteraction = modalInteraction;
         } else {
           return;
@@ -3520,15 +3529,15 @@ async function showStats(message, args = []) {
           if (!modalInteraction) {
             return;
           }
-          const requestedPage = getPageFromModal(modalInteraction, totalPages);
-          if (requestedPage === null) {
+          const reqPage = getPageFromModal(modalInteraction, totalPages);
+          if (reqPage === null) {
             await modalInteraction.reply({
               content: 'Please enter a whole page number.',
               flags: MessageFlags.Ephemeral
             });
             return;
           }
-          currentPage = requestedPage;
+          currentPage = reqPage;
           pageInteraction = modalInteraction;
         } else {
           return;
@@ -3605,13 +3614,123 @@ async function showLevelLeaderboard(interaction) {
   }, ['level']);
 }
 
+async function showLeaderboardCategories(message) {
+    const statisticsPerPage = 15;
+    const totalPages = Math.max(1, Math.ceil(statisticNames.length / statisticsPerPage));
+    let currentPage = 0;
+    const color = getUserEmbedColor(message.guild.id, message.author.id, message.member);
+    const buildEmbed = () => createEconomyEmbed(message, color)
+      .setTitle('Leaderboard Categories')
+      .setDescription([
+        '**Money and levels**',
+        '`total`, `wallet`, `bank`, `debt`, `level`',
+        '',
+        '**Statistics**',
+        ...statisticNames
+          .slice(currentPage * statisticsPerPage, (currentPage + 1) * statisticsPerPage)
+          .map(name => `\`${name}\``)
+      ].join('\n'))
+      .setFooter({ text: `Page ${currentPage + 1}/${totalPages} • ${statisticNames.length} statistics` });
+    const embed = buildEmbed();
+    const components = totalPages > 1 ? [createLeaderboardButtons(currentPage, totalPages)] : [];
+    const leaderboardMessage = await message.reply({
+      embeds: [embed],
+      components,
+      allowedMentions: {
+        parse: [],
+        repliedUser: false
+      }
+    });
+    if (totalPages <= 1) {
+      return leaderboardMessage;
+    }
+    const collector = leaderboardMessage.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      time: lbConfig.buttonTimeoutMinutes * 60 * 1000
+    });
+    collector.on('collect', async (interaction) => {
+      try {
+        if (interaction.user.id !== message.author.id) {
+          await interaction.reply({
+            content: economyMessages.leaderboardWrongUser(message.author.id),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: {
+              parse: []
+            }
+          });
+          return;
+        }
+        let pageInteraction = interaction;
+        if (interaction.customId === lbButtonIds.first) {
+          currentPage = 0;
+        } else if (interaction.customId === lbButtonIds.previous) {
+          currentPage = Math.max(0, currentPage - 1);
+        } else if (interaction.customId === lbButtonIds.next) {
+          currentPage = Math.min(totalPages - 1, currentPage + 1);
+        } else if (interaction.customId === lbButtonIds.last) {
+          currentPage = totalPages - 1;
+        } else if (interaction.customId === lbButtonIds.page) {
+          collector.resetTimer();
+          const modalId = `economy_leaderboard_categories_page_modal:${interaction.id}`;
+          const modalInteraction = await waitForPageModal(interaction, modalId, totalPages);
+          if (!modalInteraction) {
+            return;
+          }
+          const reqPage = getPageFromModal(modalInteraction, totalPages);
+          if (reqPage === null) {
+            await modalInteraction.reply({
+              content: 'Please enter a whole page number.',
+              flags: MessageFlags.Ephemeral
+            });
+            return;
+          }
+          currentPage = reqPage;
+          pageInteraction = modalInteraction;
+        } else {
+          return;
+        }
+        const updatedEmbed = buildEmbed();
+        await pageInteraction.update({
+          embeds: [updatedEmbed],
+          components: [createLeaderboardButtons(currentPage, totalPages)],
+          allowedMentions: {
+            parse: [],
+            repliedUser: false
+          }
+        });
+      } catch (error) {
+        console.error('[ECONOMY ERROR]: Failed to change leaderboard page:', error);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction
+            .reply({
+              content: formatError(error),
+              flags: MessageFlags.Ephemeral
+            })
+            .catch(() => {});
+        }
+      }
+    });
+    collector.on('end', async () => {
+      const disabledComponents = [createLeaderboardButtons(currentPage, totalPages, true)];
+      await leaderboardMessage
+        .edit({
+          components: disabledComponents
+        })
+        .catch(() => {});
+    });
+    return leaderboardMessage;
+}
+
 async function showLeaderboard(message, args = []) {
   try {
-    const requestedCategory = args[0]?.toLowerCase();
+    const requestedCategory = args.join(' ').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (requestedCategory === 'list' || requestedCategory === 'stats') {
+      return await showLeaderboardCategories(message);
+    }
     const category = requestedCategory
       ? (levelAliases.has(requestedCategory) ? 'level' : leaderboardCategoryAliases.get(requestedCategory))
       : 'total';
-    if (args.length > 1 || !category) {
+    if (!category) {
       const suppliedCategory = args.join(' ');
       const embed = economyEmbeds.leaderboardInvalidCategory(message, suppliedCategory);
       return message.reply({
@@ -3629,7 +3748,7 @@ async function showLeaderboard(message, args = []) {
     for (const entry of entries) {
       entry.badges = getLeaderboardBadges(guildUsers[entry.userId], achievements);
     }
-    const totalPages = Math.max(1, Math.ceil(entries.length / leaderboardConfig.usersPerPage));
+    const totalPages = Math.max(1, Math.ceil(entries.length / lbConfig.usersPerPage));
     let currentPage = 0;
     const embed = economyEmbeds.leaderboard(
       message,
@@ -3653,7 +3772,7 @@ async function showLeaderboard(message, args = []) {
     }
     const collector = leaderboardMessage.createMessageComponentCollector({
       componentType: ComponentType.Button,
-      time: leaderboardConfig.buttonTimeoutMinutes * 60 * 1000
+      time: lbConfig.buttonTimeoutMinutes * 60 * 1000
     });
     collector.on('collect', async (interaction) => {
       try {
@@ -3668,30 +3787,30 @@ async function showLeaderboard(message, args = []) {
           return;
         }
         let pageInteraction = interaction;
-        if (interaction.customId === leaderboardButtonIds.first) {
+        if (interaction.customId === lbButtonIds.first) {
           currentPage = 0;
-        } else if (interaction.customId === leaderboardButtonIds.previous) {
+        } else if (interaction.customId === lbButtonIds.previous) {
           currentPage = Math.max(0, currentPage - 1);
-        } else if (interaction.customId === leaderboardButtonIds.next) {
+        } else if (interaction.customId === lbButtonIds.next) {
           currentPage = Math.min(totalPages - 1, currentPage + 1);
-        } else if (interaction.customId === leaderboardButtonIds.last) {
+        } else if (interaction.customId === lbButtonIds.last) {
           currentPage = totalPages - 1;
-        } else if (interaction.customId === leaderboardButtonIds.page) {
+        } else if (interaction.customId === lbButtonIds.page) {
           collector.resetTimer();
           const modalId = `economy_leaderboard_page_modal:${interaction.id}`;
           const modalInteraction = await waitForPageModal(interaction, modalId, totalPages);
           if (!modalInteraction) {
             return;
           }
-          const requestedPage = getPageFromModal(modalInteraction, totalPages);
-          if (requestedPage === null) {
+          const reqPage = getPageFromModal(modalInteraction, totalPages);
+          if (reqPage === null) {
             await modalInteraction.reply({
               content: 'Please enter a whole page number.',
               flags: MessageFlags.Ephemeral
             });
             return;
           }
-          currentPage = requestedPage;
+          currentPage = reqPage;
           pageInteraction = modalInteraction;
         } else {
           return;
@@ -3753,7 +3872,7 @@ async function showAchievements(message, args = []) {
     saveEconomy(economyData);
     const totalPages = Math.max(
       1,
-      Math.ceil(achievements.length / achievementConfig.achievementsPerPage)
+      Math.ceil(achievements.length / achConfig.achievementsPerPage)
     );
     let currentPage = 0;
     const components = createAchievementComponents(
@@ -3773,7 +3892,7 @@ async function showAchievements(message, args = []) {
     }
     const collector = achievementMessage.createMessageComponentCollector({
       componentType: ComponentType.Button,
-      time: achievementConfig.buttonTimeoutMinutes * 60 * 1000
+      time: achConfig.buttonTimeoutMinutes * 60 * 1000
     });
     collector.on('collect', async (interaction) => {
       try {
@@ -3788,30 +3907,30 @@ async function showAchievements(message, args = []) {
           return;
         }
         let pageInteraction = interaction;
-        if (interaction.customId === achievementButtonIds.first) {
+        if (interaction.customId === achButtonIds.first) {
           currentPage = 0;
-        } else if (interaction.customId === achievementButtonIds.previous) {
+        } else if (interaction.customId === achButtonIds.previous) {
           currentPage = Math.max(0, currentPage - 1);
-        } else if (interaction.customId === achievementButtonIds.next) {
+        } else if (interaction.customId === achButtonIds.next) {
           currentPage = Math.min(totalPages - 1, currentPage + 1);
-        } else if (interaction.customId === achievementButtonIds.last) {
+        } else if (interaction.customId === achButtonIds.last) {
           currentPage = totalPages - 1;
-        } else if (interaction.customId === achievementButtonIds.page) {
+        } else if (interaction.customId === achButtonIds.page) {
           collector.resetTimer();
           const modalId = `economy_achievement_page_modal:${interaction.id}`;
           const modalInteraction = await waitForPageModal(interaction, modalId, totalPages);
           if (!modalInteraction) {
             return;
           }
-          const requestedPage = getPageFromModal(modalInteraction, totalPages);
-          if (requestedPage === null) {
+          const reqPage = getPageFromModal(modalInteraction, totalPages);
+          if (reqPage === null) {
             await modalInteraction.reply({
               content: 'Please enter a whole page number.',
               flags: MessageFlags.Ephemeral
             });
             return;
           }
-          currentPage = requestedPage;
+          currentPage = reqPage;
           pageInteraction = modalInteraction;
         } else {
           return;
@@ -3878,8 +3997,8 @@ async function work(message) {
     if (now < nextWorkAt) {
       saveEconomy(economyData);
       const nextWorkTimestamp = Math.ceil(nextWorkAt / 1000);
-      const cooldownResponse = workCooldownResponses[
-        Math.floor(Math.random() * workCooldownResponses.length)
+      const cooldownResponse = workCdResponses[
+        Math.floor(Math.random() * workCdResponses.length)
       ].replace('{time}', `<t:${nextWorkTimestamp}:R>`);
       const embed = economyEmbeds.workCooldown(message, cooldownResponse);
       return message.reply({
@@ -3990,7 +4109,7 @@ async function crime(message) {
     if (now < nextCrimeAt) {
       saveEconomy(economyData);
       const nextCrimeTimestamp = Math.ceil(nextCrimeAt / 1000);
-      const cooldownResponse = randomResponse(crimeCooldownResponses).replace(
+      const cooldownResponse = randomResponse(crimeCdResponses).replace(
         '{time}',
         `<t:${nextCrimeTimestamp}:R>`
       );
@@ -4011,7 +4130,7 @@ async function crime(message) {
       const earnedMoney = randomWholeNumber(crimeConfig.minimumPay, crimeConfig.maximumPay);
       account.wallet += earnedMoney;
       const formattedEarnings = `${currencyEmoji}**${formatMoney(earnedMoney)}**`;
-      const crimeResponse = randomResponse(crimeSuccessResponses).replace(
+      const crimeResponse = randomResponse(crimeWinResponses).replace(
         '{amount}',
         formattedEarnings
       );
@@ -4163,7 +4282,7 @@ async function beg(message) {
     if (now < nextBegAt) {
       saveEconomy(economyData);
       const nextBegTimestamp = Math.ceil(nextBegAt / 1000);
-      const cooldownResponse = randomResponse(begCooldownResponses).replace(
+      const cooldownResponse = randomResponse(begCdResponses).replace(
         '{time}',
         `<t:${nextBegTimestamp}:R>`
       );
@@ -4617,10 +4736,10 @@ async function showShop(message, args) {
     const economyData = loadEconomy();
     const account = getAccount(economyData, message.guild.id, message.author.id, message.member);
     const shopItems = loadShopItems();
-    let selectedCategory = 'all';
+    let selectedCat = 'all';
     let selectedPage = 0;
     saveEconomy(economyData);
-    const components = createShopComponents(account, shopItems, selectedCategory, selectedPage);
+    const components = createShopComponents(account, shopItems, selectedCat, selectedPage);
     const shopMessage = await message.reply({
       components,
       flags: MessageFlags.IsComponentsV2
@@ -4641,7 +4760,7 @@ async function showShop(message, args) {
           return;
         }
         if (interaction.customId === 'economy_shop_category') {
-          selectedCategory = interaction.values[0];
+          selectedCat = interaction.values[0];
           selectedPage = 0;
           const categoryEconomyData = loadEconomy();
           const categoryAccount = getAccount(
@@ -4652,8 +4771,8 @@ async function showShop(message, args) {
           );
           const categoryShopItems = loadShopItems();
           const categories = getShopCategories(categoryShopItems);
-          if (selectedCategory !== 'all' && !categories.includes(selectedCategory)) {
-            selectedCategory = 'all';
+          if (selectedCat !== 'all' && !categories.includes(selectedCat)) {
+            selectedCat = 'all';
           }
           saveEconomy(categoryEconomyData);
           account.wallet = categoryAccount.wallet;
@@ -4662,7 +4781,7 @@ async function showShop(message, args) {
             components: createShopComponents(
               categoryAccount,
               categoryShopItems,
-              selectedCategory,
+              selectedCat,
               selectedPage
             )
           });
@@ -4671,7 +4790,7 @@ async function showShop(message, args) {
         if (interaction.customId === shopButtonIds.page) {
           collector.resetTimer();
           const modalShopItems = loadShopItems();
-          const modalTotalPages = getShopPageCount(modalShopItems, selectedCategory);
+          const modalTotalPages = getShopPageCount(modalShopItems, selectedCat);
           const modalId = `economy_shop_page_modal:${interaction.id}`;
           const modalInteraction = await waitForPageModal(
             interaction,
@@ -4690,19 +4809,19 @@ async function showShop(message, args) {
           );
           const pageShopItems = loadShopItems();
           const categories = getShopCategories(pageShopItems);
-          if (selectedCategory !== 'all' && !categories.includes(selectedCategory)) {
-            selectedCategory = 'all';
+          if (selectedCat !== 'all' && !categories.includes(selectedCat)) {
+            selectedCat = 'all';
           }
-          const totalPages = getShopPageCount(pageShopItems, selectedCategory);
-          const requestedPage = getPageFromModal(modalInteraction, totalPages);
-          if (requestedPage === null) {
+          const totalPages = getShopPageCount(pageShopItems, selectedCat);
+          const reqPage = getPageFromModal(modalInteraction, totalPages);
+          if (reqPage === null) {
             await modalInteraction.reply({
               content: 'Please enter a whole page number.',
               flags: MessageFlags.Ephemeral
             });
             return;
           }
-          selectedPage = requestedPage;
+          selectedPage = reqPage;
           saveEconomy(pageEconomyData);
           account.wallet = pageAccount.wallet;
           account.ownedItems = [...pageAccount.ownedItems];
@@ -4710,7 +4829,7 @@ async function showShop(message, args) {
             components: createShopComponents(
               pageAccount,
               pageShopItems,
-              selectedCategory,
+              selectedCat,
               selectedPage
             )
           });
@@ -4737,9 +4856,9 @@ async function showShop(message, args) {
           } else if (interaction.customId === shopButtonIds.next) {
             selectedPage += 1;
           } else {
-            selectedPage = getShopPageCount(pageShopItems, selectedCategory) - 1;
+            selectedPage = getShopPageCount(pageShopItems, selectedCat) - 1;
           }
-          selectedPage = clampShopPage(selectedPage, pageShopItems, selectedCategory);
+          selectedPage = clampShopPage(selectedPage, pageShopItems, selectedCat);
           saveEconomy(pageEconomyData);
           account.wallet = pageAccount.wallet;
           account.ownedItems = [...pageAccount.ownedItems];
@@ -4747,7 +4866,7 @@ async function showShop(message, args) {
             components: createShopComponents(
               pageAccount,
               pageShopItems,
-              selectedCategory,
+              selectedCat,
               selectedPage
             )
           });
@@ -4805,7 +4924,7 @@ async function showShop(message, args) {
           components: createShopComponents(
             updatedAccount,
             updatedShopItems,
-            selectedCategory,
+            selectedCat,
             selectedPage
           )
         });
@@ -4832,7 +4951,7 @@ async function showShop(message, args) {
           components: createShopComponents(
             account,
             shopItems,
-            selectedCategory,
+            selectedCat,
             selectedPage,
             true
           )
@@ -4981,23 +5100,23 @@ async function showSettings(message, args) {
   }
 }
 
-function getAdminCommand(commandName, args) {
+function getAdminCommand(cmdName, args) {
   for (const [action, aliases] of adminMoneyAliases) {
-    if (aliases.has(commandName)) {
+    if (aliases.has(cmdName)) {
       return { type: 'money', action, args };
     }
   }
   const subcommand = args[0]?.toLowerCase();
-  if (statsAliases.has(commandName) && adminStatisticActions.has(subcommand)) {
+  if (statsAliases.has(cmdName) && adminStatisticActions.has(subcommand)) {
     return { type: 'stats', action: adminStatisticActions.get(subcommand), args: args.slice(1) };
   }
-  if (achievementAliases.has(commandName) && adminAchievementActions.has(subcommand)) {
+  if (achievementAliases.has(cmdName) && adminAchievementActions.has(subcommand)) {
     return { type: 'achievements', action: adminAchievementActions.get(subcommand), args: args.slice(1) };
   }
-  if (resetCooldownAliases.has(commandName)) {
+  if (resetCooldownAliases.has(cmdName)) {
     return { type: 'cooldown', args };
   }
-  if (adminHelpAliases.has(commandName)) {
+  if (adminHelpAliases.has(cmdName)) {
     return { type: 'help', args };
   }
   return null;
@@ -5096,8 +5215,8 @@ async function editAdminMoney(message, action, args) {
   if (args.length < 3) {
     return adminInvalidUsage(message, usage);
   }
-  const requestedPocket = args.at(-1).toLowerCase();
-  const pocket = requestedPocket === 'cash' ? 'wallet' : requestedPocket;
+  const reqPocket = args.at(-1).toLowerCase();
+  const pocket = reqPocket === 'cash' ? 'wallet' : reqPocket;
   if (pocket !== 'wallet' && pocket !== 'bank') {
     return adminInvalidUsage(message, usage);
   }
@@ -5142,20 +5261,20 @@ async function editAdminStatistics(message, action, args) {
   }
   const resetting = action === 'reset';
   const usage = resetting ? adminUsage.statsReset : adminUsage.stats;
-  const trailingArguments = resetting ? 1 : 2;
-  if (args.length < trailingArguments + 1) {
+  const trailingArgs = resetting ? 1 : 2;
+  if (args.length < trailingArgs + 1) {
     return adminInvalidUsage(message, usage);
   }
-  const statisticName = args.at(-trailingArguments).toLowerCase();
-  const resetAll = resetting && statisticName === 'all';
-  if (!resetAll && !adminStatisticNames.has(statisticName)) {
+  const statName = args.at(-trailingArgs).toLowerCase();
+  const resetAll = resetting && statName === 'all';
+  if (!resetAll && !adminStatisticNames.has(statName)) {
     return replyAdmin(message, adminMessages.invalidStatistic, true);
   }
   const amount = resetting ? 0 : parseAdminNumber(args.at(-1));
   if (amount === null || ((action === 'add' || action === 'remove') && amount === 0)) {
     return replyAdmin(message, `${adminMessages.invalidAmount}\n${usage}`, true);
   }
-  const target = await resolveAdminMember(message, args.slice(0, -trailingArguments), usage);
+  const target = await resolveAdminMember(message, args.slice(0, -trailingArgs), usage);
   if (!target) {
     return;
   }
@@ -5168,14 +5287,14 @@ async function editAdminStatistics(message, action, args) {
       targetId: target.id, action: 'stats-reset', statistic: 'all', before: previous, after: {}
     });
   }
-  const previous = account.achievementStats[statisticName] || 0;
+  const previous = account.achievementStats[statName] || 0;
   const next = action === 'add' ? previous + amount : action === 'remove' ? previous - amount : amount;
-  if (!Number.isSafeInteger(next) || next < 0 || (statisticName === 'platinum_loss_sequence_active' && next > 1)) {
+  if (!Number.isSafeInteger(next) || next < 0 || (statName === 'platinum_loss_sequence_active' && next > 1)) {
     return replyAdmin(message, adminMessages.invalidStatisticValue, true);
   }
-  account.achievementStats[statisticName] = next;
-  return saveAdminChange(message, economyData, adminMessages.statisticUpdated(target.id, statisticName, previous, next), {
-    targetId: target.id, action: `stats-${action}`, statistic: statisticName, before: previous, after: next
+  account.achievementStats[statName] = next;
+  return saveAdminChange(message, economyData, adminMessages.statisticUpdated(target.id, statName, previous, next), {
+    targetId: target.id, action: `stats-${action}`, statistic: statName, before: previous, after: next
   });
 }
 
@@ -5246,8 +5365,8 @@ async function resetAdminCooldowns(message, args) {
     return adminInvalidUsage(message, adminUsage.cooldown);
   }
   const requestedCommand = args.at(-1).toLowerCase();
-  const commandKey = getEconomyCommandKey(requestedCommand);
-  if (requestedCommand !== 'all' && !adminCooldownFields.has(commandKey)) {
+  const cmdKey = getEconomyCommandKey(requestedCommand);
+  if (requestedCommand !== 'all' && !adminCooldownFields.has(cmdKey)) {
     return replyAdmin(message, adminMessages.invalidCooldown, true);
   }
   const target = await resolveAdminMember(message, args.slice(0, -1), adminUsage.cooldown);
@@ -5256,7 +5375,7 @@ async function resetAdminCooldowns(message, args) {
   }
   const economyData = loadEconomy();
   const account = getAccount(economyData, message.guild.id, target.id, target);
-  const commands = requestedCommand === 'all' ? [...adminCooldownFields.keys()] : [commandKey];
+  const commands = requestedCommand === 'all' ? [...adminCooldownFields.keys()] : [cmdKey];
   const before = {};
   for (const command of commands) {
     const field = adminCooldownFields.get(command);
@@ -5273,9 +5392,9 @@ async function resetAdminCooldowns(message, args) {
     targetId: target.id, action: 'reset-cooldown', commands, before
   });
   const prefix = `${message.guild.id}:${target.id}:`;
-  for (const key of commandCooldowns.keys()) {
-    if (key.startsWith(prefix) && (requestedCommand === 'all' || key === `${prefix}${commandKey}`)) {
-      commandCooldowns.delete(key);
+  for (const key of cmdCooldowns.keys()) {
+    if (key.startsWith(prefix) && (requestedCommand === 'all' || key === `${prefix}${cmdKey}`)) {
+      cmdCooldowns.delete(key);
     }
   }
 }
@@ -5365,8 +5484,8 @@ async function removeDepartedEconomyUser(guild, userId) {
 async function cleanupDepartedEconomyUsers(client) {
   if (!client.isReady()) return;
   for (const guild of client.guilds.cache.values()) {
-    if (guild.available === false || economyCleanupRunning.has(guild.id)) continue;
-    economyCleanupRunning.add(guild.id);
+    if (guild.available === false || cleanupRunning.has(guild.id)) continue;
+    cleanupRunning.add(guild.id);
     try {
       const userIds = Object.keys(loadEconomy().guilds[guild.id]?.users || {});
       if (userIds.length === 0) continue;
@@ -5377,14 +5496,14 @@ async function cleanupDepartedEconomyUsers(client) {
     } catch (error) {
       console.error(`[ECONOMY CLEANUP]: Skipped guild ${guild.id}:`, error);
     } finally {
-      economyCleanupRunning.delete(guild.id);
+      cleanupRunning.delete(guild.id);
     }
   }
 }
 
 function initializeEconomyCleanup(client) {
-  if (!client || economyCleanupClients.has(client)) return;
-  economyCleanupClients.add(client);
+  if (!client || cleanupClients.has(client)) return;
+  cleanupClients.add(client);
   const run = () => {
     cleanupDepartedEconomyUsers(client).catch((error) => {
       console.error('[ECONOMY CLEANUP]: Cleanup failed:', error);
@@ -5395,7 +5514,7 @@ function initializeEconomyCleanup(client) {
       console.error('[ECONOMY CLEANUP]: Could not check departed member:', error);
     });
   });
-  const timer = setInterval(run, economyCleanupIntervalMilliseconds);
+  const timer = setInterval(run, cleanupIntervalMs);
   timer.unref?.();
   // This module receives the client on its first message; no index.js changes needed.
   setImmediate(run);
@@ -5407,8 +5526,8 @@ async function handleEconomyCommand(message) {
     return false;
   }
   const commandParts = message.content.slice(commandPrefix.length).trim().split(/\s+/);
-  const commandName = commandParts.shift()?.toLowerCase();
-  const adminCommand = getAdminCommand(commandName, commandParts);
+  const cmdName = commandParts.shift()?.toLowerCase();
+  const adminCommand = getAdminCommand(cmdName, commandParts);
   if (adminCommand) {
     // Check ownership before any cooldown reply, account write, or achievement check.
     if (typeof config.ownerId !== 'string' || message.author.id !== config.ownerId) {
@@ -5423,15 +5542,15 @@ async function handleEconomyCommand(message) {
     }
     return true;
   }
-  const commandKey = getEconomyCommandKey(commandName);
-  if (!commandKey) {
+  const cmdKey = getEconomyCommandKey(cmdName);
+  if (!cmdKey) {
     return false;
   }
-  const remainingCooldown = useCommandRepeatCooldown(message, commandKey);
+  const remainingCooldown = useCommandRepeatCooldown(message, cmdKey);
   if (remainingCooldown > 0) {
     const embed = economyEmbeds.commandRepeatCooldown(
       message,
-      commandKey,
+      cmdKey,
       remainingCooldown
     );
     await message.reply({
@@ -5439,71 +5558,71 @@ async function handleEconomyCommand(message) {
     });
     return true;
   }
-  if (balanceAliases.has(commandName)) {
+  if (balanceAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showBalance(message));
   }
-  if (levelAliases.has(commandName)) {
+  if (levelAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showLevel(message, commandParts));
   }
-  if (leaderboardAliases.has(commandName)) {
+  if (leaderboardAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showLeaderboard(message, commandParts));
   }
-  if (workAliases.has(commandName)) {
+  if (workAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => work(message));
   }
-  if (collectAliases.has(commandName)) {
+  if (collectAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => collectDailyIncome(message, commandParts));
   }
-  if (crimeAliases.has(commandName)) {
+  if (crimeAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => crime(message));
   }
-  if (robAliases.has(commandName)) {
+  if (robAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => rob(message, commandParts));
   }
-  if (begAliases.has(commandName)) {
+  if (begAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => beg(message));
   }
-  if (slotAliases.has(commandName)) {
+  if (slotAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => slot(message, commandParts));
   }
-  if (rouletteAliases.has(commandName)) {
+  if (rouletteAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => roulette(message, commandParts));
   }
-  if (shopAliases.has(commandName)) {
+  if (shopAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showShop(message, commandParts));
   }
-  if (achievementAliases.has(commandName)) {
+  if (achievementAliases.has(cmdName)) {
     await checkAndAnnounceAchievements(message);
     await showAchievements(message, commandParts);
     return true;
   }
-  if (cooldownAliases.has(commandName)) {
+  if (cooldownAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showCooldowns(message, commandParts));
   }
-  if (statsAliases.has(commandName)) {
+  if (statsAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showStats(message, commandParts));
   }
-  if (settingsAliases.has(commandName)) {
+  if (settingsAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showSettings(message, commandParts));
   }
-  if (badgeAliases.has(commandName)) {
+  if (badgeAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showSettings(message, ['badges', ...commandParts]));
   }
-  if (colorAliases.has(commandName)) {
+  if (colorAliases.has(cmdName)) {
     return completeEconomyCommand(message, () =>
       showSettings(message, ['color', ...commandParts])
     );
   }
-  if (giveAliases.has(commandName)) {
+  if (giveAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => giveMoney(message, commandParts));
   }
-  if (depositAliases.has(commandName)) {
+  if (depositAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => deposit(message, commandParts));
   }
-  if (withdrawAliases.has(commandName)) {
+  if (withdrawAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => withdraw(message, commandParts));
   }
-  if (helpAliases.has(commandName)) {
+  if (helpAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showHelp(message));
   }
   return false;
