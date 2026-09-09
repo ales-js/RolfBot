@@ -203,12 +203,13 @@ const staatsfeindSuccessChanceBoost = 25;
 const shopRoleIds = new Map([
   [robbingImmunityItemId, robbingImmunityRoleId],
   [staatsfeindItemId, staatsfeindRoleId],
-  [income1000ItemId, income1000RoleId]
+  [income1000ItemId, income1000RoleId],
 ]);
 
 const dailyIncomeRoles = new Map([
   [income1000RoleId, 1000],
-  ['1533921404037238784', 500]
+  ['1533921404037238784', 500], // early member
+  ['1532385051898155138', 2500] // booster
 ]);
 
 const slotConfig = {
@@ -351,7 +352,7 @@ const slotAliases = new Set(['slot', 'slots', 's']);
 const rouletteAliases = new Set(['roulette', 'roulete', 'roul', 'rlt', 'r']);
 const leaderboardAliases = new Set(['lb', 'leaderboard', 'lboard', 'top']);
 const shopAliases = new Set(['shop', 'store']);
-const achievementAliases = new Set(['achievements', 'achievement', 'ach', 'achs', 'advancements', 'badges']);
+const achievementAliases = new Set(['achievements', 'achievement', 'ach', 'achs', 'advancements']);
 const statsAliases = new Set(['stats', 'statistics', 'stat']);
 const cooldownAliases = new Set(['cooldowns', 'cooldown', 'cd', 'cds']);
 const levelAliases = new Set(['level', 'lvl', 'lvls', 'levels', 'xp']);
@@ -397,10 +398,13 @@ const leaderboardCategoryAliases = new Map([
   ['all', 'total'],
   ['wallet', 'wallet'],
   ['cash', 'wallet'],
-  ['bank', 'bank']
+  ['bank', 'bank'],
+  ['debt', 'debt'],
+  ['debts', 'debt']
 ]);
 
 const settingsAliases = new Set(['settings', 'setting', 'options', 'option']);
+const badgeAliases = new Set(['badges']);
 const colorAliases = new Set(['color', 'colour']);
 
 const commandAliasGroups = new Map([
@@ -419,6 +423,7 @@ const commandAliasGroups = new Map([
   ['cooldowns', cooldownAliases],
   ['level', levelAliases],
   ['settings', settingsAliases],
+  ['badges', badgeAliases],
   ['color', colorAliases],
   ['deposit', depositAliases],
   ['withdraw', withdrawAliases],
@@ -444,15 +449,16 @@ const commandUsage = {
   collect: '`?collect`',
   slots: '`?slots [ amount | all | half | quarter ]`',
   roulette: '`?roulette [ amount | all | half | quarter ] [ space ]`',
-  leaderboard: '`?leaderboard [ total | wallet | bank | level ]`',
+  leaderboard: '`?leaderboard [ total | wallet | bank | debt | level ]`',
   shop: '`?shop`',
   achievements: '`?achievements`',
   stats: '`?stats`',
   cooldowns: '`?cooldowns`',
   level: '`?level`',
-  settings: '`?settings`',
+  settings: '`?settings [ badges | color ]`',
   color: '`?color [ reset | #HEXHEX ]`',
   colorHex: '`?color #HEXHEX`',
+  badges: '?badges',
   help: '`?help`'
 };
 
@@ -591,7 +597,7 @@ const helpCommandEntries = [
   },
   {
     usage: commandUsage.leaderboard,
-    description: 'View the richest users by total, wallet, or bank balance. ' +
+    description: 'View users by total, wallet, bank, or debt. ' +
       `For the level leaderboard, use: ${[...levelAliases].map(alias => '\`' + alias + '\`').join(', ')}.`,
     aliases: leaderboardAliases
   },
@@ -672,7 +678,8 @@ const leaderboardText = {
   categoryNames: {
     total: 'Total Money',
     wallet: 'Wallet',
-    bank: 'Bank'
+    bank: 'Bank',
+    debt: 'Debt'
   },
   emptyLeaderboard: 'err empty db'
 };
@@ -1102,6 +1109,7 @@ function createAchievementComponents(
       new TextDisplayBuilder().setContent(
         [
           '## RolfBot Achievements',
+          'view and manage your badges with `?badges`',
           `-# ${unlockedCount}/${achievements.length} unlocked (${unlockedPercentage}%)`
         ].join('\n')
       )
@@ -1138,7 +1146,7 @@ function createAchievementComponents(
     const achievementText = hidden
       ? [title, 'Keep playing to discover it.'].join('\n')
       : [
-         `### **${achievement.name}**`,
+         `### ${achievement.badge} **${achievement.name}**`,
           `> **${achievement.description}**`,
           title,
           ...(achievement.rewards.money > 0 || achievement.rewards.xp > 0
@@ -1255,17 +1263,22 @@ const economyEmbeds = {
             .map((entry, index) => {
               const rank = startIndex + index + 1;
               const youMarker = entry.userId === message.author.id ? ' <- you!' : '';
+              const badgePrefix = entry.badges ? `${entry.badges} ` : '';
               if (category === 'level') {
-                return `**${rank}.** <@${entry.userId}> · \`Lv. ${entry.level}\` · \`${formatXp(entry.xp)} XP\`${youMarker}`;
+                return `**${rank}.** ${badgePrefix}<@${entry.userId}> · \`Lv. ${entry.level}\` · \`${formatXp(entry.xp)} XP\`${youMarker}`;
               }
               return (
-                `**${rank}.** <@${entry.userId}>` +
+                `**${rank}.** ${badgePrefix}<@${entry.userId}>` +
                 `${currencyEmoji}` +
                 `**${formatMoney(entry.value)}** ${youMarker}`
               );
             })
             .join('\n')
-        : category === 'level' ? 'No XP data yet.' : leaderboardText.emptyLeaderboard;
+        : category === 'level'
+          ? 'No XP data yet.'
+          : category === 'debt'
+            ? 'Nobody is currently in debt.'
+            : leaderboardText.emptyLeaderboard;
     const yourRank = entries.findIndex((entry) => entry.userId === message.author.id) + 1;
     return createEconomyEmbed(message, account.settings.embedColor)
       .setTitle(`${categoryName} Leaderboard`)
@@ -1273,7 +1286,7 @@ const economyEmbeds = {
       .setFooter({
         text:
           `Page ${currentPage + 1}/${totalPages} • ` +
-          `${entries.length} users • Your rank: ${category === 'level' && yourRank === 0 ? 'Unranked' : yourRank}`
+          `${entries.length} users • Your rank: ${yourRank === 0 ? 'Unranked' : yourRank}`
       })
       .setTimestamp();
   },
@@ -1952,12 +1965,13 @@ const economyEmbeds = {
   settingsMenu(message, account) {
     return createEconomyEmbed(message, account.settings.embedColor)
       .setDescription(
-        `**Available RolfBot Settings:**\n` +
-          `\n` +
           `\`?color [ reset | #HEXHEX ]\`\n` +
           `change your RolfBot Embed color.\n` +
-          `Aliases: \`?color\`, \`?colour\`, \`?[ any setting alias ] color\`, \`?[ any setting alias ] colour\`` +
-          `` // space for future settings
+          `Aliases: \`?color\`, \`?colour\`, \`?settings color\`, \`?settings colour\`` +
+          `\n\n` +
+          `\`?badges\`\n` +
+          `view and manage your RolfBot Economy badges.\n` +
+          `Aliases: \`?badges\`, \`?settings badges\``
       )
       .setTimestamp();
   },
@@ -1967,6 +1981,7 @@ const economyEmbeds = {
       [
         `Incorrect usage! \`${settingName}\` isn't a setting.`,
         '**available settings:**',
+        commandUsage.badges,
         commandUsage.color
       ].join('\n')
     );
@@ -2334,6 +2349,9 @@ function readAchievements() {
       return {
         id: achievement.id,
         name: achievement.name.trim(),
+        badge: typeof achievement.badge === 'string' && achievement.badge.trim() !== '[]'
+          ? achievement.badge.trim()
+          : '',
         description: achievement.description.trim(),
         imageUrl,
         hidden: achievement.hidden === true,
@@ -2727,14 +2745,21 @@ function getLeaderboardValue(account, category) {
 
 function getLeaderboardEntries(data, guildId, category) {
   const users = data.guilds[guildId]?.users || {};
-  return Object.entries(users)
+  const entries = Object.entries(users)
     .map(([userId, account]) => ({
       userId,
       value: getLeaderboardValue(account, category)
-    }))
-    .sort(
-      (entryA, entryB) => entryB.value - entryA.value || entryA.userId.localeCompare(entryB.userId)
-    );
+    }));
+  if (category === 'debt') {
+    return entries
+      .filter((entry) => entry.value < 0)
+      .sort(
+        (entryA, entryB) => entryA.value - entryB.value || entryA.userId.localeCompare(entryB.userId)
+      );
+  }
+  return entries.sort(
+    (entryA, entryB) => entryB.value - entryA.value || entryA.userId.localeCompare(entryB.userId)
+  );
 }
 
 function formatMoney(amount) {
@@ -3549,6 +3574,15 @@ async function showStats(message, args = []) {
   }
 }
 
+function getLeaderboardBadges(account, achievements) {
+  const unlockedIds = new Set(Array.isArray(account?.achievements) ? account.achievements : []);
+  const hiddenIds = new Set(Array.isArray(account?.settings?.hiddenBadgeIds) ? account.settings.hiddenBadgeIds : []);
+  return achievements
+    .filter((achievement) => unlockedIds.has(achievement.id) && achievement.badge && !hiddenIds.has(achievement.id))
+    .map((achievement) => achievement.badge)
+    .join('');
+}
+
 function getLevelLeaderboardEntries() {
   return Object.entries(xpStore.loadXp())
     .map(([userId, account]) => ({ userId, level: account.level, xp: account.xp }))
@@ -3587,6 +3621,11 @@ async function showLeaderboard(message, args = []) {
     const entries = category === 'level'
       ? getLevelLeaderboardEntries()
       : getLeaderboardEntries(economyData, message.guild.id, category);
+    const achievements = fs.existsSync(achievementsFile) ? loadAchievements() : [];
+    const guildUsers = economyData.guilds[message.guild.id]?.users || {};
+    for (const entry of entries) {
+      entry.badges = getLeaderboardBadges(guildUsers[entry.userId], achievements);
+    }
     const totalPages = Math.max(1, Math.ceil(entries.length / leaderboardConfig.usersPerPage));
     let currentPage = 0;
     const embed = economyEmbeds.leaderboard(
@@ -4804,8 +4843,95 @@ async function showShop(message, args) {
   }
 }
 
+function createBadgeSettingsComponents(account, badges, page, disableAll = false) {
+  const pages = Math.max(1, Math.ceil(badges.length / 5));
+  const hiddenIds = new Set(account.settings.hiddenBadgeIds || []);
+  const container = new ContainerBuilder()
+    .setAccentColor(Number.parseInt(account.settings.embedColor.slice(1), 16))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+      '## Badge Settings\nChoose which earned badges appear before your name on leaderboards. you can get badges by completing difficult achievements. use `?achievements` and look for emojis in front of achievement names.'
+    ));
+  for (const badge of badges.slice(page * 5, page * 5 + 5)) {
+    const owned = account.achievements.includes(badge.id);
+    const hidden = hiddenIds.has(badge.id);
+    const secret = badge.hidden && !owned;
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
+    container.addSectionComponents(new SectionBuilder()
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(secret
+        ? '### 🔒 Hidden Badge\nUnlock its achievement to discover it.'
+        : `### ${badge.badge} ${badge.name}\n${badge.description}\n-# ${!owned ? '🔒 Locked - unlock this achievement first.' : hidden ? 'Hidden on leaderboards' : 'Shown on leaderboards'}`))
+      .setButtonAccessory(new ButtonBuilder()
+        .setCustomId(`badge_toggle:${badge.id}`)
+        .setLabel(!owned ? 'Locked' : hidden ? 'Show' : 'Hide')
+        .setStyle(owned && hidden ? ButtonStyle.Success : ButtonStyle.Danger)
+        .setDisabled(disableAll || !owned)));
+  }
+  if (!badges.length) container.addTextDisplayComponents(new TextDisplayBuilder().setContent('No achievement badges are available yet.'));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Page ${page + 1}/${pages}`));
+  const components = [container];
+  if (pages > 1) components.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('badge_previous').setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(disableAll || page === 0),
+    new ButtonBuilder().setCustomId('badge_next').setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(disableAll || page === pages - 1)
+  ));
+  return components;
+}
+
+async function showBadgeSettings(message) {
+  const badges = loadAchievements().filter(achievement => achievement.badge);
+  const readAccount = () => {
+    const data = loadEconomy();
+    const account = getAccount(data, message.guild.id, message.author.id, message.member);
+    if (!Array.isArray(account.settings.hiddenBadgeIds)) account.settings.hiddenBadgeIds = [];
+    return { data, account };
+  };
+  let page = 0;
+  const initial = readAccount();
+  saveEconomy(initial.data);
+  const panel = await message.reply({
+    flags: MessageFlags.IsComponentsV2,
+    components: createBadgeSettingsComponents(initial.account, badges, page),
+    allowedMentions: { parse: [], repliedUser: false }
+  });
+  const collector = panel.createMessageComponentCollector({ componentType: ComponentType.Button, time: 120000 });
+  collector.on('collect', async interaction => {
+    try {
+      if (interaction.user.id !== message.author.id) {
+        await interaction.reply({ content: 'Only the person who opened these settings can use these buttons.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await interaction.deferUpdate();
+      const { data, account } = readAccount();
+      if (interaction.customId === 'badge_previous') page = Math.max(0, page - 1);
+      else if (interaction.customId === 'badge_next') page = Math.min(Math.max(0, Math.ceil(badges.length / 5) - 1), page + 1);
+      else if (interaction.customId.startsWith('badge_toggle:')) {
+        const id = interaction.customId.slice('badge_toggle:'.length);
+        if (account.achievements.includes(id) && loadAchievements().some(badge => badge.id === id && badge.badge)) {
+          const hidden = new Set(account.settings.hiddenBadgeIds);
+          if (hidden.has(id)) hidden.delete(id);
+          else hidden.add(id);
+          account.settings.hiddenBadgeIds = [...hidden];
+          saveEconomy(data);
+        }
+      }
+      await interaction.editReply({ components: createBadgeSettingsComponents(account, badges, page, collector.ended) });
+    } catch (error) {
+      console.error('[ECONOMY ERROR]: Failed to update badge settings:', error);
+      if (interaction.deferred || interaction.replied) await interaction.followUp({ content: 'Could not update badge settings. Please reopen ?badges and try again.', flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+  });
+  collector.on('end', async () => {
+    try {
+      await panel.edit({ components: createBadgeSettingsComponents(readAccount().account, badges, page, true) });
+    } catch (error) {
+      console.error('[ECONOMY ERROR]: Failed to close badge settings:', error);
+    }
+  });
+  return panel;
+}
+
 async function showSettings(message, args) {
   try {
+    if (args[0]?.toLowerCase() === 'badges') return await showBadgeSettings(message);
     const economyData = loadEconomy();
     const account = getAccount(economyData, message.guild.id, message.author.id, message.member);
     const settingName = args[0]?.toLowerCase();
@@ -5356,6 +5482,9 @@ async function handleEconomyCommand(message) {
   }
   if (settingsAliases.has(commandName)) {
     return completeEconomyCommand(message, () => showSettings(message, commandParts));
+  }
+  if (badgeAliases.has(commandName)) {
+    return completeEconomyCommand(message, () => showSettings(message, ['badges', ...commandParts]));
   }
   if (colorAliases.has(commandName)) {
     return completeEconomyCommand(message, () =>
