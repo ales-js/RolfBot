@@ -432,8 +432,6 @@ const commandAliasGroups = new Map([
   ['help', helpAliases]
 ]);
 
-// Customizable responses and embeds
-
 const currencyEmoji = '<:DDR_mark:1532733538565226546>';
 const currencyEmojiId = '1532733538565226546';
 const stopwatchEmoji = '<:RolfBot_stopwatch:1544698730639261748>';
@@ -987,8 +985,28 @@ function createShopComponents(
 }
 
 function createEconomyEmbed(message, color, author = message.author) {
+  let badges = '';
+  try {
+    const guildId = message.guild?.id || message.guildId;
+    if (guildId && fs.existsSync(economyFile) && fs.existsSync(achievementsFile)) {
+      const data = JSON.parse(readJsonText(economyFile));
+      const account = data.guilds?.[guildId]?.users?.[author.id];
+      badges = getLeaderboardBadges(account, loadAchievements())
+        .replace(/<a?:([A-Za-z0-9_]+):[0-9]+>/g, ' :$1: ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+  } catch (error) {
+    console.error('[ECONOMY ERROR]: Failed to load author badges:', error);
+  }
+  const name = badges ? `${badges} ${author.username}` : author.username;
+  let authorName = '';
+  for (const char of name) {
+    if (authorName.length + char.length > 256) break;
+    authorName += char;
+  }
   return new EmbedBuilder().setColor(color).setAuthor({
-    name: author.username,
+    name: authorName,
     iconURL: author.displayAvatarURL()
   });
 }
@@ -1023,11 +1041,13 @@ function formatDailyIncomeRoles(incomeRoles) {
 }
 
 function formatStatisticName(statName) {
+  if (extraStats.has(statName)) return extraStats.get(statName).label;
   const words = statName.replaceAll('_', ' ');
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 function isMoneyStatistic(statName) {
+  if (extraStats.has(statName)) return extraStats.get(statName).type === 'money';
   return (
     statName.startsWith('money_') ||
     statName.startsWith('largest_') ||
@@ -1041,7 +1061,10 @@ function isMoneyStatistic(statName) {
 }
 
 function formatStatisticValue(statName, value) {
-  const formattedValue = formatMoney(value);
+  const def = extraStats.get(statName);
+  if (def?.type === 'rank' && !value) return '**—**';
+  if (def?.type === 'percent') return `**${statDecimals.format(value)}%**`;
+  const formattedValue = def ? statDecimals.format(value) : formatMoney(value);
   return isMoneyStatistic(statName)
     ? `${currencyEmoji}**${formattedValue}**`
     : `**${formattedValue}**`;
@@ -1354,7 +1377,7 @@ const economyEmbeds = {
       .join('\n');
     return createEconomyEmbed(message, account.settings.embedColor)
       .setTitle('RolfBot Statistics')
-      .setDescription(`(counting after <t:1788710400:d>)\n${description}`)
+      .setDescription(`${description}`)
       .setFooter({
         text:
           `Page ${currentPage + 1}/${totalPages} • ` +
@@ -2018,8 +2041,6 @@ const economyEmbeds = {
   }
 };
 
-// Economy helpers and commands
-
 const jsonFileCache = new Map();
 const definitionCache = new Map();
 const moneyFormatter = new Intl.NumberFormat('en-US');
@@ -2063,11 +2084,11 @@ function saveJsonFile(file, data) {
   const temporaryFile = `${file}.tmp`;
   fs.writeFileSync(temporaryFile, text);
   fs.renameSync(temporaryFile, file);
-  // The save has already succeeded; cache maintenance must not turn it into an error.
   jsonFileCache.delete(file);
 }
 
 function loadEconomy() {
+  refreshStatsDefinitions();
   if (!fs.existsSync(economyFile)) {
     return {
       guilds: {}
@@ -2078,6 +2099,15 @@ function loadEconomy() {
     const data = rawData.trim() ? JSON.parse(rawData) : {};
     if (!data.guilds || typeof data.guilds !== 'object') {
       data.guilds = {};
+    }
+    for (const [key, def] of Object.entries(data.statCatalog || {})) {
+      if (/^(shop_item_|shop_category_|achievements_)/.test(key) && def && typeof def.label === 'string') {
+        addStat(key, def.label.slice(0, 90), def.type === 'money' ? 'money' : 'count');
+      }
+    }
+    registerRankStats();
+    for (const [guildId, guild] of Object.entries(data.guilds)) {
+      for (const userId of Object.keys(guild.users || {})) getAccount(data, guildId, userId);
     }
     return data;
   } catch (error) {
@@ -2219,7 +2249,7 @@ function readAchievements() {
     }
     const normalizedCondition = { type: condition.type };
     const validateTarget = () => {
-      if (!Number.isSafeInteger(condition.target) || condition.target <= 0) {
+      if (!Number.isFinite(condition.target) || Math.abs(condition.target) > Number.MAX_SAFE_INTEGER || condition.target <= 0) {
         throw new Error(`${achievementId} invalid number for target`);
       }
       normalizedCondition.target = condition.target;
@@ -2382,6 +2412,12 @@ function loadXp() {
 }
 
 function saveEconomy(data) {
+  data.statCatalog = Object.fromEntries([...extraStats].filter(([key]) => /^(shop_item_|shop_category_|achievements_)/.test(key))
+    .map(([key, def]) => [key, { label: def.label, type: def.type }]));
+  for (const [guildId, guild] of Object.entries(data.guilds)) {
+    for (const userId of Object.keys(guild.users || {})) getAccount(data, guildId, userId);
+  }
+  updateRankRecords(data);
   saveJsonFile(economyFile, data);
 }
 
@@ -2505,7 +2541,6 @@ function getAccount(data, guildId, userId, member) {
   account.revokedAchievements = [
     ...new Set(account.revokedAchievements.filter((id) => typeof id === 'string'))
   ];
-  // Existing unlocked achievements have already received their normal rewards.
   if (!Array.isArray(account.achievementRewardClaims)) {
     account.achievementRewardClaims = [...account.achievements];
   }
@@ -2516,7 +2551,9 @@ function getAccount(data, guildId, userId, member) {
     account.achievementStats = {};
   }
   for (const [statName, value] of Object.entries(account.achievementStats)) {
-    if (!Number.isSafeInteger(value) || value < 0) {
+    const def = extraStats.get(statName);
+    if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER ||
+        (!def && !Number.isSafeInteger(value)) || (value < 0 && !def?.signed)) {
       delete account.achievementStats[statName];
     }
   }
@@ -2526,18 +2563,20 @@ function getAccount(data, guildId, userId, member) {
   if (typeof account.settings.embedColor !== 'string') {
     account.settings.embedColor = memberDefaultEmbedColor;
   }
+  syncExtraStats(account, member);
   return account;
 }
 
 function incrementAchievementStatistic(account, statName, amount = 1) {
-  const currentValue = Number.isSafeInteger(account.achievementStats[statName])
+  const currentValue = Number.isFinite(account.achievementStats[statName])
     ? account.achievementStats[statName]
     : 0;
   account.achievementStats[statName] = currentValue + amount;
+  recordExtraIncrement(account, statName, amount);
 }
 
 function setMaximumAchievementStatistic(account, statName, value) {
-  const currentValue = Number.isSafeInteger(account.achievementStats[statName])
+  const currentValue = Number.isFinite(account.achievementStats[statName])
     ? account.achievementStats[statName]
     : 0;
   account.achievementStats[statName] = Math.max(currentValue, value);
@@ -2556,6 +2595,7 @@ function recordMoneyLost(account, source, amount) {
 }
 
 function recordSlotResult(account, won, outcome, amount, payout) {
+  recordExtraSlot(account, won, outcome, amount, payout);
   incrementAchievementStatistic(account, 'slots_plays');
   incrementAchievementStatistic(account, 'slots_wagered', amount);
   setMaximumAchievementStatistic(account, 'largest_slots_bet', amount);
@@ -2602,6 +2642,7 @@ function setAchievementTimestamp(account, timestampName, timestamp) {
 }
 
 function getAchievementProgress(achievement, account) {
+  syncExtraStats(account);
   switch (achievement.condition.type) {
     case 'wallet':
       return Math.max(0, Math.floor(account.wallet));
@@ -2677,10 +2718,14 @@ function unlockAchievements(achievements, account) {
       }
       unlockedIds.add(achievement.id);
       account.achievements.push(achievement.id);
+      dailyStat(account, 'most_achievements_day');
       if (rewardedIds.has(achievement.id)) {
         newlyUnlocked.push({ ...achievement, rewards: { money: 0, xp: 0 } });
       } else {
         account.wallet += achievement.rewards.money;
+        incrementAchievementStatistic(account, 'achievement_money_rewards', achievement.rewards.money);
+        incrementAchievementStatistic(account, 'achievement_xp_rewards', achievement.rewards.xp);
+        dailyStat(account, 'most_money_earned_day', achievement.rewards.money);
         account.achievementRewardClaims.push(achievement.id);
         rewardedIds.add(achievement.id);
         newlyUnlocked.push(achievement);
@@ -2742,7 +2787,7 @@ async function checkAndAnnounceAchievements(message) {
 function getLeaderboardValue(account, category) {
   if (statisticNames.includes(category)) {
     const value = account?.achievementStats?.[category];
-    return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+    return Number.isFinite(value) ? value : 0;
   }
   const wallet = Number.isFinite(account?.wallet) ? account.wallet : 0;
   const bank = Number.isFinite(account?.bank) ? account.bank : 0;
@@ -2769,8 +2814,9 @@ function getLeaderboardEntries(data, guildId, category) {
         (entryA, entryB) => entryA.value - entryB.value || entryA.userId.localeCompare(entryB.userId)
       );
   }
-  return entries.sort(
-    (entryA, entryB) => entryB.value - entryA.value || entryA.userId.localeCompare(entryB.userId)
+  const ascending = extraStats.get(category)?.type === 'rank' || category === 'lowest_total_wealth';
+  return (extraStats.get(category)?.type === 'rank' ? entries.filter(entry => entry.value > 0) : entries).sort(
+    (a, b) => (ascending ? a.value - b.value : b.value - a.value) || a.userId.localeCompare(b.userId)
   );
 }
 
@@ -3130,11 +3176,17 @@ function scheduleRouletteGame(game) {
 
 function createRouletteSummaries(game, number, economyData) {
   const summariesByUser = new Map();
+  const accounts = new Map([...new Set(game.bets.map(bet => bet.userId))].map(
+    id => [id, getAccount(economyData, game.guildId, id)]
+  ));
   for (const bet of game.bets) {
-    const account = getAccount(economyData, game.guildId, bet.userId);
+    const account = accounts.get(bet.userId);
     const betWon = rouletteBetWins(bet, number);
     const payout = betWon ? Math.floor(bet.amount * bet.multiplier) : 0;
     account.wallet += payout;
+    const tracking = statsMeta(account);
+    tracking.escrow = Math.max(0, (tracking.escrow || 0) - bet.amount);
+    recordExtraRouletteBet(account, bet, betWon, payout, number);
     incrementAchievementStatistic(account, 'roulette_bets');
     incrementAchievementStatistic(account, 'roulette_wagered', bet.amount);
     setMaximumAchievementStatistic(account, 'largest_roulette_bet', bet.amount);
@@ -3147,15 +3199,26 @@ function createRouletteSummaries(game, number, economyData) {
       userId: bet.userId,
       amountBet: 0,
       payout: 0,
-      net: 0
+      net: 0,
+      bets: 0,
+      wins: 0
     };
+    summary.bets += 1;
+    summary.wins += betWon ? 1 : 0;
     summary.amountBet += bet.amount;
     summary.payout += payout;
     summary.net += payout - bet.amount;
     summariesByUser.set(bet.userId, summary);
   }
   for (const summary of summariesByUser.values()) {
-    const account = getAccount(economyData, game.guildId, summary.userId);
+    const account = accounts.get(summary.userId);
+    setMaximumAchievementStatistic(account, 'most_roulette_bets_round', summary.bets);
+    setMaximumAchievementStatistic(account, 'most_roulette_wins_round', summary.wins);
+    setMaximumAchievementStatistic(account, 'most_roulette_wagered_round', summary.amountBet);
+    setMaximumAchievementStatistic(account, 'biggest_roulette_net_win', summary.net);
+    streakStat(account, 'roulette_win', summary.net > 0);
+    streakStat(account, 'roulette_loss', summary.net < 0);
+    recordGamblingDay(account, summary.net);
     incrementAchievementStatistic(account, 'roulette_games');
     if (summary.net > 0) {
       incrementAchievementStatistic(account, 'roulette_wins');
@@ -3198,6 +3261,8 @@ async function cancelRouletteGame(game) {
     for (const bet of game.bets) {
       const account = getAccount(economyData, game.guildId, bet.userId);
       account.wallet += bet.amount;
+      const tracking = statsMeta(account);
+      tracking.escrow = Math.max(0, (tracking.escrow || 0) - bet.amount);
     }
     saveEconomy(economyData);
     refunded = true;
@@ -3615,6 +3680,7 @@ async function showLevelLeaderboard(interaction) {
 }
 
 async function showLeaderboardCategories(message) {
+    loadEconomy();
     const statisticsPerPage = 15;
     const totalPages = Math.max(1, Math.ceil(statisticNames.length / statisticsPerPage));
     let currentPage = 0;
@@ -3723,6 +3789,7 @@ async function showLeaderboardCategories(message) {
 
 async function showLeaderboard(message, args = []) {
   try {
+    loadEconomy();
     const requestedCategory = args.join(' ').trim().toLowerCase().replace(/[\s-]+/g, '_');
     if (requestedCategory === 'list' || requestedCategory === 'stats') {
       return await showLeaderboardCategories(message);
@@ -4008,7 +4075,6 @@ async function work(message) {
     const earnedMoney =
       Math.floor(Math.random() * (workConfig.maximumPay - workConfig.minimumPay + 1)) +
       workConfig.minimumPay;
-    // transfer from earnedMoney to wallet \\
     account.wallet += earnedMoney;
     account.lastWorkAt = now;
     incrementAchievementStatistic(account, 'work');
@@ -4081,6 +4147,20 @@ async function collectDailyIncome(message, args = []) {
     account.collectedIncomeRoleIds.push(
       ...unclaimedIncomeRoles.map((role) => role.roleId)
     );
+    const tracking = statsMeta(account);
+    if (tracking.lastCollectedDay !== tracking.day) {
+      tracking.lastCollectedDay = tracking.day;
+      tracking.collectionDays = (tracking.collectionDays || 0) + 1;
+    }
+    tracking.collectionMoney = (tracking.collectionMoney || 0) + dailyIncome;
+    for (const role of unclaimedIncomeRoles) {
+      tracking.claimed[role.roleId] = true;
+      incrementAchievementStatistic(account, 'individual_income_claims');
+      incrementAchievementStatistic(account, `income_role_${role.roleId}`, role.income);
+      if ([...shopRoleIds].some(([itemId, roleId]) => roleId === role.roleId && account.ownedItems.includes(itemId))) {
+        incrementAchievementStatistic(account, 'purchased_role_income', role.income);
+      }
+    }
     incrementAchievementStatistic(account, 'collect');
     recordMoneyEarned(account, 'collect', dailyIncome);
     saveEconomy(economyData);
@@ -4199,6 +4279,9 @@ async function rob(message, args = []) {
       targetMember
     );
     if (hasRobbingImmunity(targetMember, targetAccount)) {
+      if (Date.now() >= account.lastRobAt + robConfig.cooldownMinutes * 60000) {
+        incrementAchievementStatistic(targetAccount, 'immunity_blocks');
+      }
       saveEconomy(economyData);
       const embed = economyEmbeds.robImmune(message, targetMember.user);
       return message.reply({
@@ -4230,6 +4313,7 @@ async function rob(message, args = []) {
     );
     const succeeded = Math.random() * 100 < successChance;
     account.lastRobAt = now;
+    mapStat(account, 'robTargets', targetMember.id, 'unique_rob_targets');
     let embed;
     if (succeeded) {
       const stolenPercentage = randomWholeNumber(
@@ -4249,6 +4333,8 @@ async function rob(message, args = []) {
         stolenMoney,
         stolenPercentage
       );
+      mapStat(account, 'robVictims', targetMember.id, 'unique_rob_victims', 'most_robs_same_user');
+      mapStat(targetAccount, 'robbers', message.author.id, 'unique_robbers', 'most_robbed_by_same_user');
       incrementAchievementStatistic(account, 'rob_successes');
       recordMoneyEarned(account, 'rob', stolenMoney);
       incrementAchievementStatistic(targetAccount, 'times_robbed');
@@ -4259,6 +4345,7 @@ async function rob(message, args = []) {
       const fine = randomWholeNumber(robConfig.minimumFine, robConfig.maximumFine);
       account.wallet -= fine;
       embed = economyEmbeds.robFail(message, targetMember.user, fine);
+      incrementAchievementStatistic(targetAccount, 'failed_robs_against_you');
       incrementAchievementStatistic(account, 'rob_failures');
       recordMoneyLost(account, 'rob_fines', fine);
     }
@@ -4360,7 +4447,6 @@ async function deposit(message, args) {
         embeds: [embed]
       });
     }
-    // transfer from wallet to bank \\
     account.wallet -= amount;
     account.bank += amount;
     incrementAchievementStatistic(account, 'deposits');
@@ -4429,7 +4515,6 @@ async function withdraw(message, args) {
         embeds: [embed]
       });
     }
-    // transfer from bank to wallet \\
     account.bank -= amount;
     account.wallet += amount;
     incrementAchievementStatistic(account, 'withdrawals');
@@ -4532,6 +4617,8 @@ async function giveMoney(message, args) {
     }
     account.wallet -= amount;
     targetAccount.wallet += amount;
+    mapStat(account, 'giveRecipients', targetMember.id, 'unique_give_recipients');
+    mapStat(targetAccount, 'transferSenders', message.author.id, 'unique_transfer_senders');
     incrementAchievementStatistic(account, 'gives');
     incrementAchievementStatistic(account, 'money_given', amount);
     setMaximumAchievementStatistic(account, 'largest_give', amount);
@@ -4595,7 +4682,6 @@ async function slot(message, args) {
     const reels = won ? [outcome.emoji, outcome.emoji, outcome.emoji] : getLosingSlotReels();
     const topReels = getRandomSlotRow();
     const bottomReels = getRandomSlotRow();
-    // take the bet and return the payout on a win \\
     account.wallet -= amount;
     account.wallet += payout;
     recordSlotResult(account, won, outcome, amount, payout);
@@ -4687,6 +4773,7 @@ async function roulette(message, args) {
       amount
     };
     account.wallet -= amount;
+    statsMeta(account).escrow += amount;
     saveEconomy(economyData);
     let game = rouletteGames.get(message.guild.id);
     const isNewGame = !game;
@@ -4914,6 +5001,10 @@ async function showShop(message, args) {
         await grantShopItemRole(message, item);
         updatedAccount.wallet -= item.price;
         updatedAccount.ownedItems.push(item.id);
+        mapStat(updatedAccount, 'shopItems', item.id, 'unique_shop_items');
+        incrementAchievementStatistic(updatedAccount, `shop_item_${statId(item.id)}_purchases`);
+        incrementAchievementStatistic(updatedAccount, `shop_category_${statId(item.category)}_purchases`);
+        incrementAchievementStatistic(updatedAccount, `shop_category_${statId(item.category)}_spent`, item.price);
         incrementAchievementStatistic(updatedAccount, 'shop_purchases');
         incrementAchievementStatistic(updatedAccount, 'shop_money_spent', item.price);
         setMaximumAchievementStatistic(updatedAccount, 'most_expensive_shop_purchase', item.price);
@@ -4981,7 +5072,7 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
     container.addSectionComponents(new SectionBuilder()
       .addTextDisplayComponents(new TextDisplayBuilder().setContent(secret
         ? '### 🔒 Hidden Badge\nUnlock its achievement to discover it.'
-        : `### ${badge.badge} ${badge.name}\n${badge.description}\n-# ${!owned ? '🔒 Locked - unlock this achievement first.' : hidden ? 'Hidden on leaderboards' : 'Shown on leaderboards'}`))
+        : `### ${badge.badge} ${badge.name}\n${badge.description}\n-# ${!owned ? '🔒 Locked' : hidden ? 'Hidden on leaderboards' : 'Shown on leaderboards'}`))
       .setButtonAccessory(new ButtonBuilder()
         .setCustomId(`badge_toggle:${badge.id}`)
         .setLabel(!owned ? 'Locked' : hidden ? 'Show' : 'Hide')
@@ -5032,6 +5123,7 @@ async function showBadgeSettings(message) {
           if (hidden.has(id)) hidden.delete(id);
           else hidden.add(id);
           account.settings.hiddenBadgeIds = [...hidden];
+          incrementAchievementStatistic(account, 'badge_changes');
           saveEconomy(data);
         }
       }
@@ -5132,7 +5224,6 @@ function logAdminCommand(message, status, details = {}) {
     command: message.content,
     ...details
   };
-  // JSON keeps user-supplied newlines and terminal control characters escaped.
   const line = `[ECONOMY ADMIN ${status}]: ${JSON.stringify(entry)}`;
   if (status === 'DENIED' || status === 'ERROR') {
     console.warn(line);
@@ -5228,7 +5319,6 @@ async function editAdminMoney(message, action, args) {
   if (!target) {
     return;
   }
-  // Read after member lookup, so a pending fetch cannot overwrite newer balances.
   const economyData = loadEconomy();
   const account = getAccount(economyData, message.guild.id, target.id, target);
   const previous = account[pocket];
@@ -5249,6 +5339,7 @@ async function editAdminMoney(message, action, args) {
 }
 
 async function editAdminStatistics(message, action, args) {
+  loadEconomy();
   if (action === 'list') {
     if (args.length > 0) {
       return adminInvalidUsage(message, adminUsage.statsList);
@@ -5270,7 +5361,11 @@ async function editAdminStatistics(message, action, args) {
   if (!resetAll && !adminStatisticNames.has(statName)) {
     return replyAdmin(message, adminMessages.invalidStatistic, true);
   }
-  const amount = resetting ? 0 : parseAdminNumber(args.at(-1));
+  const def = extraStats.get(statName);
+  const rawAmount = args.at(-1)?.replaceAll(',', '');
+  const amount = resetting ? 0 : def
+    ? (/^-?\d+(?:\.\d+)?$/.test(rawAmount || '') && Number.isFinite(Number(rawAmount)) ? Number(rawAmount) : null)
+    : parseAdminNumber(args.at(-1));
   if (amount === null || ((action === 'add' || action === 'remove') && amount === 0)) {
     return replyAdmin(message, `${adminMessages.invalidAmount}\n${usage}`, true);
   }
@@ -5283,16 +5378,40 @@ async function editAdminStatistics(message, action, args) {
   if (resetAll) {
     const previous = { ...account.achievementStats };
     account.achievementStats = {};
+    delete account.statTracking;
+    delete account.statOverrides;
+    const rankHistory = economyData.guilds[message.guild.id].statRankTracking;
+    if (rankHistory) for (const ids of Object.values(rankHistory.leaders)) {
+      const index = ids.indexOf(target.id);
+      if (index !== -1) ids.splice(index, 1);
+    }
     return saveAdminChange(message, economyData, adminMessages.statisticsReset(target.id), {
       targetId: target.id, action: 'stats-reset', statistic: 'all', before: previous, after: {}
     });
   }
   const previous = account.achievementStats[statName] || 0;
   const next = action === 'add' ? previous + amount : action === 'remove' ? previous - amount : amount;
-  if (!Number.isSafeInteger(next) || next < 0 || (statName === 'platinum_loss_sequence_active' && next > 1)) {
+  if (!Number.isFinite(next) || Math.abs(next) > Number.MAX_SAFE_INTEGER ||
+      ((!def || def.type === 'count' || def.type === 'rank') && !Number.isSafeInteger(next)) ||
+      (next < 0 && !def?.signed) || (statName === 'platinum_loss_sequence_active' && next > 1)) {
     return replyAdmin(message, adminMessages.invalidStatisticValue, true);
   }
   account.achievementStats[statName] = next;
+  if (resetting && account.statTracking) {
+    const meta = account.statTracking;
+    if (Object.hasOwn(meta.daily, statName)) meta.daily[statName] = 0;
+    const mapKey = { unique_rob_targets: 'robTargets', unique_rob_victims: 'robVictims',
+      unique_robbers: 'robbers', unique_give_recipients: 'giveRecipients',
+      unique_transfer_senders: 'transferSenders', unique_roulette_numbers_won: 'rouletteNumbers',
+      unique_shop_items: 'shopItems', most_robs_same_user: 'robVictims',
+      most_robbed_by_same_user: 'robbers' }[statName];
+    if (mapKey) meta.maps[mapKey] = {};
+  }
+  if (def?.calc || def?.type === 'rank') {
+    account.statOverrides ||= {};
+    if (resetting) delete account.statOverrides[statName];
+    else account.statOverrides[statName] = next;
+  }
   return saveAdminChange(message, economyData, adminMessages.statisticUpdated(target.id, statName, previous, next), {
     targetId: target.id, action: `stats-${action}`, statistic: statName, before: previous, after: next
   });
@@ -5456,25 +5575,21 @@ async function completeEconomyCommand(message, action) {
 
 async function removeDepartedEconomyUser(guild, userId) {
   if (guild.available === false || !guild.client.isReady()) return;
-  // Let active roulette bets finish before removing their accounts.
   if (rouletteGames.get(guild.id)?.bets.some((bet) => bet.userId === userId)) return;
   try {
     await guild.members.fetch({ user: userId, force: true, cache: false });
     return;
   } catch (error) {
-    // Missing permissions, timeouts and connection errors are not proof of departure.
     if (Number(error.code) !== 10007) throw error;
   }
   if (guild.available === false || !guild.client.isReady()) return;
   if (rouletteGames.get(guild.id)?.bets.some((bet) => bet.userId === userId)) return;
-  // Reload after the network request so concurrent commands' changes are preserved.
   const data = loadEconomy();
   const users = data.guilds[guild.id]?.users;
   if (!users || !Object.prototype.hasOwnProperty.call(users, userId)) return;
   const backup = JSON.stringify({
     removedAt: new Date().toISOString(), guildId: guild.id, userId, account: users[userId]
   });
-  // A failed backup aborts deletion. Entries can be restored manually if needed.
   fs.appendFileSync(path.join(__dirname, 'economy_removed_users.jsonl'), backup + '\n');
   delete users[userId];
   saveEconomy(data);
@@ -5504,6 +5619,7 @@ async function cleanupDepartedEconomyUsers(client) {
 function initializeEconomyCleanup(client) {
   if (!client || cleanupClients.has(client)) return;
   cleanupClients.add(client);
+  startStatsClock(client);
   const run = () => {
     cleanupDepartedEconomyUsers(client).catch((error) => {
       console.error('[ECONOMY CLEANUP]: Cleanup failed:', error);
@@ -5516,7 +5632,6 @@ function initializeEconomyCleanup(client) {
   });
   const timer = setInterval(run, cleanupIntervalMs);
   timer.unref?.();
-  // This module receives the client on its first message; no index.js changes needed.
   setImmediate(run);
 }
 
@@ -5529,7 +5644,6 @@ async function handleEconomyCommand(message) {
   const cmdName = commandParts.shift()?.toLowerCase();
   const adminCommand = getAdminCommand(cmdName, commandParts);
   if (adminCommand) {
-    // Check ownership before any cooldown reply, account write, or achievement check.
     if (typeof config.ownerId !== 'string' || message.author.id !== config.ownerId) {
       logAdminCommand(message, 'DENIED');
       return true;
@@ -5558,6 +5672,7 @@ async function handleEconomyCommand(message) {
     });
     return true;
   }
+  recordCommandUse(message, cmdKey);
   if (balanceAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showBalance(message));
   }
@@ -5639,6 +5754,395 @@ function getUserEmbedColor(guildId, userId, member) {
     return defaultEmbedColor(member);
   }
 }
+
+const extraStats = new Map();
+const statsSession = require('crypto').randomUUID();
+const statDecimals = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
+let statsDefs = { achievements: [], items: [] };
+let statsDefsStamp = '';
+
+function addStat(key, label, type = 'count', calc = null, signed = false) {
+  if (!extraStats.has(key)) {
+    extraStats.set(key, { label, type, calc, signed });
+    if (!statisticNames.includes(key)) statisticNames.push(key);
+    adminStatisticNames.add(key);
+    leaderboardCategoryAliases.set(key, key);
+  } else if (calc) {
+    Object.assign(extraStats.get(key), { label, type, calc, signed });
+  }
+  return key;
+}
+
+function statId(value) {
+  const raw = String(value).trim().toLowerCase();
+  const slug = raw.replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 24) || 'other';
+  return `${slug}_${require('crypto').createHash('sha256').update(raw).digest('hex').slice(0, 10)}`;
+}
+
+function statNum(account, key) {
+  const value = account.achievementStats?.[key];
+  return Number.isFinite(value) ? value : 0;
+}
+
+function initExtraStats() {
+  const count = (key, label) => addStat(key, label);
+  const money = (key, label, signed = false) => addStat(key, label, 'money', null, signed);
+  const ratio = (key, label, top, bottom, percent = false) => addStat(key, label,
+    percent ? 'percent' : 'money', a => {
+      const n = typeof top === 'function' ? top(a) : statNum(a, top);
+      const d = typeof bottom === 'function' ? bottom(a) : statNum(a, bottom);
+      return d > 0 ? n / d * (percent ? 100 : 1) : 0;
+    });
+  const sum = (key, label, keys, type = 'count') => addStat(key, label, type,
+    a => keys.reduce((total, name) => total + statNum(a, name), 0));
+  const net = (key, label, earned, lost) => addStat(key, label, 'money',
+    a => statNum(a, earned) - statNum(a, lost), true);
+  for (const [key, label] of Object.entries({
+    highest_wallet_balance: 'Highest wallet balance', highest_bank_balance: 'Highest bank balance',
+    highest_total_wealth: 'Highest total wealth', lowest_total_wealth: 'Lowest total wealth',
+    largest_debt: 'Largest debt', debt_repaid: 'Total debt repaid',
+    most_money_earned_day: 'Most money earned in one day', most_money_lost_day: 'Most money lost in one day',
+    biggest_wealth_increase_day: 'Biggest wealth increase in one day',
+    biggest_wealth_decrease_day: 'Biggest wealth decrease in one day',
+    missed_daily_income: 'Uncollected income on observed days',
+    most_money_given_day: 'Most money given in one day', most_money_received_day: 'Most money received in one day',
+    biggest_slots_net_win: 'Biggest slots net profit in one spin',
+    most_roulette_wagered_round: 'Most money wagered in one roulette round',
+    biggest_roulette_net_win: 'Biggest roulette net profit in one round',
+    biggest_gambling_profit_day: 'Biggest gambling profit in one day',
+    biggest_gambling_loss_day: 'Biggest gambling loss in one day',
+    most_shop_spent_day: 'Most money spent in the shop in one day',
+    purchased_role_income: 'Income earned from purchased income roles',
+    achievement_money_rewards: 'Money earned from achievement rewards'
+  })) money(key, label, ['highest_wallet_balance', 'highest_bank_balance', 'highest_total_wealth', 'lowest_total_wealth'].includes(key));
+  for (const [key, label] of Object.entries({
+    times_entered_debt: 'Times entering debt', most_work_day: 'Most work commands in one day',
+    individual_income_claims: 'Individual income role payouts collected', most_beg_day: 'Most successful begs in one day',
+    unique_rob_targets: 'Different users targeted for robbery', unique_rob_victims: 'Different users successfully robbed',
+    unique_robbers: 'Different users who robbed you', most_robs_same_user: 'Most times robbing the same user',
+    most_robbed_by_same_user: 'Most times robbed by the same user', immunity_blocks: 'Robbery attempts blocked by your immunity',
+    failed_robs_against_you: 'Failed robbery attempts against you', most_rob_successes_day: 'Most successful robberies in one day',
+    most_times_robbed_day: 'Most times robbed in one day', unique_give_recipients: 'Different users given money',
+    unique_transfer_senders: 'Different users money received from', spins_since_platinum: 'Spins since last platinum',
+    most_spins_between_platinum: 'Most spins between platinum wins', platinum_then_five_losses: 'Platinum followed by five losses completed',
+    most_slots_plays_day: 'Most slots spins in one day', most_roulette_bets_round: 'Most bets in one roulette round',
+    most_roulette_wins_round: 'Most winning bets in one roulette round', roulette_zero_wins: 'Successful straight bets on zero',
+    roulette_straight_wins: 'Successful straight-number bets', unique_roulette_numbers_won: 'Different straight numbers won',
+    most_roulette_games_day: 'Most roulette rounds in one day', unique_shop_items: 'Different shop items purchased',
+    most_shop_purchases_day: 'Most shop purchases in one day', most_achievements_day: 'Most achievements unlocked in one day',
+    achievement_xp_rewards: 'XP earned from achievement rewards', badge_changes: 'Badge changes',
+    active_days: 'Different days using the economy', total_commands: 'Total bot commands used',
+    most_commands_day: 'Most bot commands used in one day'
+  })) count(key, label);
+  for (const [key, label] of [['work_days', 'consecutive days worked'], ['collect_days', 'daily collection streak'], ['active_days', 'consecutive days using the economy'],
+    ['crime_success', 'crime success streak'], ['crime_failure', 'crime failure streak'],
+    ['rob_success', 'robbery success streak'], ['rob_failure', 'robbery failure streak'],
+    ['platinum', 'consecutive platinum wins'], ['gold_plus', 'consecutive gold-or-better wins'],
+    ['roulette_win', 'roulette round win streak'], ['roulette_loss', 'roulette round loss streak']]) {
+    count(`current_${key}_streak`, `Current ${label}`);
+    count(`longest_${key}_streak`, `Longest ${label}`);
+  }
+  ratio('average_work_payout', 'Average work payout', 'money_earned_work', 'work');
+  addStat('average_collect_payout', 'Average daily collection payout', 'money', a =>
+    a.statTracking?.collectionDays > 0 ? a.statTracking.collectionMoney / a.statTracking.collectionDays : 0);
+  ratio('average_beg_payout', 'Average begging payout', 'money_earned_beg', 'beg');
+  for (const key of ['crime', 'rob']) {
+    sum(`${key}_attempts`, `Total ${key === 'rob' ? 'robbery' : 'crime'} attempts`, [`${key}_successes`, `${key}_failures`]);
+    ratio(`${key}_success_rate`, `${key === 'rob' ? 'Robbery' : 'Crime'} success rate`, `${key}_successes`, a => statNum(a, `${key}_successes`) + statNum(a, `${key}_failures`), true);
+    net(`${key}_net_profit`, `Net ${key === 'rob' ? 'robbery' : 'crime'} profit after fines`, `money_earned_${key}`, key === 'rob' ? 'money_lost_rob_fines' : 'money_lost_crime');
+    ratio(`average_${key}_payout`, `Average successful ${key === 'rob' ? 'robbery' : 'crime'} payout`, `money_earned_${key}`, `${key}_successes`);
+    ratio(`average_${key}_fine`, `Average ${key === 'rob' ? 'robbery' : 'crime'} fine`, key === 'rob' ? 'money_lost_rob_fines' : 'money_lost_crime', `${key}_failures`);
+  }
+  ratio('average_give', 'Average transfer sent', 'money_given', 'gives');
+  ratio('average_received', 'Average transfer received', 'money_received', 'transfers_received');
+  net('net_transfers', 'Net transfers received minus given', 'money_received', 'money_given');
+  ratio('average_deposit', 'Average deposit amount', 'money_deposited', 'deposits');
+  ratio('average_withdrawal', 'Average withdrawal amount', 'money_withdrawn', 'withdrawals');
+  for (const key of ['slots', 'roulette']) {
+    ratio(`${key}_win_rate`, `${key === 'slots' ? 'Slots' : 'Roulette round'} win rate`, `${key}_wins`, key === 'slots' ? 'slots_plays' : 'roulette_games', true);
+    net(`${key}_net_profit`, `${key === 'slots' ? 'Slots' : 'Roulette'} net profit`, `${key}_payouts`, `${key}_wagered`);
+    ratio(`${key}_return_percentage`, `${key === 'slots' ? 'Slots' : 'Roulette'} return percentage`, `${key}_payouts`, `${key}_wagered`, true);
+    ratio(`average_${key}_bet`, `Average ${key} bet`, `${key}_wagered`, key === 'slots' ? 'slots_plays' : 'roulette_bets');
+    ratio(`average_${key}_payout`, `Average ${key} payout per winning ${key === 'slots' ? 'spin' : 'bet'}`, `${key}_payouts`, key === 'slots' ? 'slots_wins' : 'roulette_bets_won');
+  }
+  ratio('roulette_bet_win_rate', 'Roulette individual bet win rate', 'roulette_bets_won', 'roulette_bets', true);
+  sum('gambling_wagered', 'Combined slots and roulette wagers', ['slots_wagered', 'roulette_wagered'], 'money');
+  sum('gambling_payouts', 'Combined slots and roulette payouts', ['slots_payouts', 'roulette_payouts'], 'money');
+  addStat('gambling_net_profit', 'Combined slots and roulette net profit', 'money', a =>
+    statNum(a, 'slots_payouts') + statNum(a, 'roulette_payouts') - statNum(a, 'slots_wagered') - statNum(a, 'roulette_wagered'), true);
+  ratio('average_shop_price', 'Average shop purchase price', 'shop_money_spent', 'shop_purchases');
+  addStat('achievements_unlocked', 'Achievements unlocked', 'count', a => a.achievements.length);
+  addStat('achievement_completion', 'Achievement completion percentage', 'percent', a => statsDefs.achievements.length ?
+    statsDefs.achievements.filter(x => a.achievements.includes(x.id)).length / statsDefs.achievements.length * 100 : 0);
+  addStat('hidden_achievements_unlocked', 'Hidden achievements unlocked', 'count', a => statsDefs.achievements.filter(x => x.hidden && a.achievements.includes(x.id)).length);
+  addStat('badges_unlocked', 'Badges unlocked', 'count', a => statsDefs.achievements.filter(x => x.badge && a.achievements.includes(x.id)).length);
+  for (const tier of ['bronze', 'silver', 'gold', 'platinum']) money(`slots_${tier}_winnings`, `Slots net winnings from ${tier}`);
+  for (const type of [...rouletteOutsideBets.keys(), 'straight', 'split', 'street', 'corner', 'six_line']) {
+    count(`roulette_${type}_bets`, `Roulette ${type.replaceAll('_', ' ')} bets placed`);
+    count(`roulette_${type}_wins`, `Roulette ${type.replaceAll('_', ' ')} bets won`);
+    money(`roulette_${type}_wagered`, `Roulette ${type.replaceAll('_', ' ')} money wagered`);
+    money(`roulette_${type}_net_profit`, `Roulette ${type.replaceAll('_', ' ')} net profit`, true);
+  }
+  for (const key of commandAliasGroups.keys()) count(`commands_${key}`, `Uses of ?${key}`);
+  for (const [id] of dailyIncomeRoles) money(`income_role_${id}`, `Income earned from role ${id}`);
+}
+
+function refreshStatsDefinitions() {
+  const stamp = [shopItemsFile, achievementsFile].map(file => fs.existsSync(file) ? getJsonFileStamp(file) : '').join('|');
+  if (stamp === statsDefsStamp) return;
+  const shop = fs.existsSync(shopItemsFile) ? JSON.parse(readJsonText(shopItemsFile)) : {};
+  const ach = fs.existsSync(achievementsFile) ? JSON.parse(readJsonText(achievementsFile)) : {};
+  statsDefs = { items: shop.items || [], achievements: (ach.achievements || []).filter(x => x.enabled !== false) };
+  for (const item of statsDefs.items) {
+    if (!item?.id) continue;
+    addStat(`shop_item_${statId(item.id)}_purchases`, `Purchases: ${String(item.name || item.id).slice(0, 55)}`);
+    const cat = String(item.category || 'Other').trim();
+    addStat(`shop_category_${statId(cat)}_purchases`, `Shop purchases: ${cat.slice(0, 55)}`);
+    addStat(`shop_category_${statId(cat)}_spent`, `Shop money spent: ${cat.slice(0, 55)}`, 'money');
+  }
+  for (const ach of statsDefs.achievements) {
+    const difficulty = String(ach.difficulty || 'Unspecified').trim();
+    addStat(`achievements_${statId(difficulty)}`, `Achievements unlocked: ${difficulty.slice(0, 55)}`, 'count', a =>
+      statsDefs.achievements.filter(x => String(x.difficulty || 'Unspecified').trim().toLowerCase() === difficulty.toLowerCase() && a.achievements.includes(x.id)).length);
+  }
+  statsDefsStamp = stamp;
+  registerRankStats();
+}
+
+function registerRankStats() {
+  for (const cat of ['wallet', 'bank', 'total', 'debt', 'level', ...statisticNames.filter(key => !/^(best_rank_|days_first_)/.test(key))]) {
+    const label = extraStats.get(cat)?.label || formatStatisticName(cat);
+    addStat(`best_rank_${cat}`, `Best rank: ${label.slice(0, 65)}`, 'rank');
+    addStat(`days_first_${cat}`, `Days finishing first: ${label.slice(0, 60)}`);
+  }
+}
+
+function statDay(now = Date.now()) {
+  const p = getDailyIncomeDateTimeParts(now);
+  return Math.floor(Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day)) / 86400000);
+}
+
+function statsMeta(account, now = Date.now()) {
+  if (!account.statTracking || typeof account.statTracking !== 'object') {
+    const total = account.wallet + account.bank;
+    account.statTracking = { startedAt: now, day: statDay(now), daily: {}, maps: {}, streakDays: {},
+      wealth: total, dayWealth: total, roles: {}, claimed: {}, escrow: 0 };
+    for (const [key, value] of Object.entries({ highest_wallet_balance: account.wallet,
+      highest_bank_balance: account.bank, highest_total_wealth: total, lowest_total_wealth: total,
+      largest_debt: Math.max(0, -total) })) {
+      if (!Number.isFinite(account.achievementStats[key])) account.achievementStats[key] = value;
+    }
+  }
+  const meta = account.statTracking;
+  if (meta.escrowSession !== statsSession) {
+    meta.escrow = 0;
+    meta.escrowSession = statsSession;
+  }
+  const today = statDay(now);
+  if (meta.day !== today) {
+    const missed = Object.entries(meta.roles).reduce((sum, [id, income]) => sum + (meta.claimed[id] ? 0 : income), 0);
+    account.achievementStats.missed_daily_income = statNum(account, 'missed_daily_income') + missed;
+    meta.day = today;
+    meta.daily = {};
+    meta.dayWealth = meta.wealth;
+    meta.roles = {};
+    meta.claimed = {};
+  }
+  return meta;
+}
+
+function dailyStat(account, key, amount = 1, now = Date.now()) {
+  const meta = statsMeta(account, now);
+  meta.daily[key] = (meta.daily[key] || 0) + amount;
+  account.achievementStats[key] = Math.max(statNum(account, key), meta.daily[key]);
+}
+
+function streakStat(account, key, success) {
+  account.achievementStats[`current_${key}_streak`] = success ? statNum(account, `current_${key}_streak`) + 1 : 0;
+  setMaximumAchievementStatistic(account, `longest_${key}_streak`, statNum(account, `current_${key}_streak`));
+}
+
+function dayStreak(account, key, now = Date.now()) {
+  const meta = statsMeta(account, now);
+  const today = statDay(now);
+  if (meta.streakDays[key] === today) return false;
+  const previous = meta.streakDays[key];
+  if (previous !== today - 1) account.achievementStats[`current_${key}_streak`] = 0;
+  streakStat(account, key, true);
+  meta.streakDays[key] = today;
+  return true;
+}
+
+function mapStat(account, map, id, uniqueKey, maximumKey) {
+  const meta = statsMeta(account);
+  const values = meta.maps[map] ||= {};
+  values[id] = (Object.hasOwn(values, id) ? values[id] : 0) + 1;
+  if (uniqueKey) account.achievementStats[uniqueKey] = Object.keys(values).length;
+  if (maximumKey) setMaximumAchievementStatistic(account, maximumKey, values[id]);
+}
+
+function syncExtraStats(account, member, now = Date.now()) {
+  const meta = statsMeta(account, now);
+  const stats = account.achievementStats;
+  if (member?.roles?.cache) {
+    for (const [id, income] of dailyIncomeRoles) {
+      if (member.roles.cache.has(id)) meta.roles[id] = income;
+    }
+    if (account.incomeRoleClaimsDate === getDailyIncomeDateKey(now)) {
+      for (const id of account.collectedIncomeRoleIds) meta.claimed[id] = true;
+    }
+  }
+  const total = account.wallet + account.bank + (meta.escrow || 0);
+  stats.highest_wallet_balance = Math.max(stats.highest_wallet_balance, account.wallet);
+  stats.highest_bank_balance = Math.max(stats.highest_bank_balance, account.bank);
+  stats.highest_total_wealth = Math.max(stats.highest_total_wealth, total);
+  stats.lowest_total_wealth = Math.min(stats.lowest_total_wealth, total);
+  stats.largest_debt = Math.max(stats.largest_debt, -total, 0);
+  if (meta.wealth >= 0 && total < 0) stats.times_entered_debt = statNum(account, 'times_entered_debt') + 1;
+  if (meta.wealth < 0 && total > meta.wealth) stats.debt_repaid = statNum(account, 'debt_repaid') + Math.min(-meta.wealth, total - meta.wealth);
+  stats.biggest_wealth_increase_day = Math.max(statNum(account, 'biggest_wealth_increase_day'), total - meta.dayWealth);
+  stats.biggest_wealth_decrease_day = Math.max(statNum(account, 'biggest_wealth_decrease_day'), meta.dayWealth - total);
+  meta.wealth = total;
+  for (const key of ['work_days', 'collect_days', 'active_days']) {
+    if (meta.streakDays[key] < statDay(now) - 1) stats[`current_${key}_streak`] = 0;
+  }
+  for (const [key, def] of extraStats) {
+    if (def.calc) stats[key] = def.calc(account);
+  }
+  for (const [key, value] of Object.entries(account.statOverrides || {})) stats[key] = value;
+}
+
+function recordExtraIncrement(account, name, amount) {
+  const daily = { work: 'most_work_day', beg: 'most_beg_day', rob_successes: 'most_rob_successes_day',
+    times_robbed: 'most_times_robbed_day', slots_plays: 'most_slots_plays_day', roulette_games: 'most_roulette_games_day',
+    money_earned_total: 'most_money_earned_day', money_lost_total: 'most_money_lost_day',
+    money_given: 'most_money_given_day', money_received: 'most_money_received_day',
+    shop_purchases: 'most_shop_purchases_day', shop_money_spent: 'most_shop_spent_day', total_commands: 'most_commands_day' };
+  if (daily[name]) dailyStat(account, daily[name], amount);
+  if (name === 'work') dayStreak(account, 'work_days');
+  if (name === 'collect') dayStreak(account, 'collect_days');
+  for (const key of ['crime', 'rob']) {
+    if (name === `${key}_successes` || name === `${key}_failures`) {
+      streakStat(account, `${key}_success`, name.endsWith('successes'));
+      streakStat(account, `${key}_failure`, name.endsWith('failures'));
+    }
+  }
+}
+
+function recordExtraSlot(account, won, outcome, amount, payout) {
+  const meta = statsMeta(account);
+  const tier = won ? outcome.name.toLowerCase() : '';
+  streakStat(account, 'platinum', tier === 'platinum');
+  streakStat(account, 'gold_plus', tier === 'platinum' || tier === 'gold');
+  if (tier === 'platinum') {
+    if (meta.seenPlatinum) setMaximumAchievementStatistic(account, 'most_spins_between_platinum', statNum(account, 'spins_since_platinum'));
+    meta.seenPlatinum = true;
+    account.achievementStats.spins_since_platinum = 0;
+  } else if (meta.seenPlatinum) {
+    incrementAchievementStatistic(account, 'spins_since_platinum');
+  }
+  if (won) {
+    incrementAchievementStatistic(account, `slots_${tier}_winnings`, Math.max(0, payout - amount));
+    setMaximumAchievementStatistic(account, 'biggest_slots_net_win', payout - amount);
+  } else if (account.achievementStats.platinum_loss_sequence_active === 1 && statNum(account, 'current_platinum_followup_losses') === 4) {
+    incrementAchievementStatistic(account, 'platinum_then_five_losses');
+  }
+  recordGamblingDay(account, payout - amount);
+}
+
+function recordGamblingDay(account, net) {
+  const meta = statsMeta(account);
+  meta.daily.gamblingNet = (meta.daily.gamblingNet || 0) + net;
+  setMaximumAchievementStatistic(account, 'biggest_gambling_profit_day', meta.daily.gamblingNet);
+  setMaximumAchievementStatistic(account, 'biggest_gambling_loss_day', -meta.daily.gamblingNet);
+}
+
+function recordExtraRouletteBet(account, bet, won, payout, number) {
+  const type = bet.key === 'inside' ? ({ 1: 'straight', 2: 'split', 3: 'street', 4: 'corner', 6: 'six_line' })[bet.numbers.length] : bet.key;
+  incrementAchievementStatistic(account, `roulette_${type}_bets`);
+  incrementAchievementStatistic(account, `roulette_${type}_wagered`, bet.amount);
+  incrementAchievementStatistic(account, `roulette_${type}_net_profit`, payout - bet.amount);
+  if (won) {
+    incrementAchievementStatistic(account, `roulette_${type}_wins`);
+    if (type === 'straight') {
+      if (number === 0) incrementAchievementStatistic(account, 'roulette_zero_wins');
+      mapStat(account, 'rouletteNumbers', String(number), 'unique_roulette_numbers_won');
+    }
+  }
+}
+
+function recordCommandUse(message, key) {
+  const data = loadEconomy();
+  const account = getAccount(data, message.guild.id, message.author.id, message.member);
+  incrementAchievementStatistic(account, 'total_commands');
+  incrementAchievementStatistic(account, `commands_${key}`);
+  if (dayStreak(account, 'active_days')) incrementAchievementStatistic(account, 'active_days');
+  saveEconomy(data);
+}
+
+function updateRankRecords(data, now = Date.now()) {
+  const today = statDay(now);
+  const xpRanks = getLevelLeaderboardEntries();
+  for (const [guildId, guild] of Object.entries(data.guilds)) {
+    const users = guild.users || {};
+    const history = guild.statRankTracking ||= { day: today, leaders: {} };
+    if (history.day !== today) {
+      for (const [cat, ids] of Object.entries(history.leaders)) {
+        for (const id of ids) if (users[id]) incrementAchievementStatistic(users[id], `days_first_${cat}`);
+      }
+      history.day = today;
+      history.leaders = {};
+    }
+    const categories = ['wallet', 'bank', 'total', 'debt', ...statisticNames.filter(key => !/^(best_rank_|days_first_)/.test(key))];
+    for (const cat of categories) {
+      const entries = getLeaderboardEntries(data, guildId, cat);
+      const eligible = extraStats.get(cat)?.type === 'rank' ? entries.filter(x => x.value > 0) : entries;
+      history.leaders[cat] = eligible.length ? [eligible[0].userId] : [];
+      eligible.forEach((entry, i) => {
+        const rank = i + 1;
+        const account = users[entry.userId];
+        const key = `best_rank_${cat}`;
+        account.achievementStats[key] = account.statOverrides?.[key] ?? Math.min(statNum(account, key) || Infinity, rank);
+      });
+    }
+    const xpEntries = xpRanks;
+    history.leaders.level = xpEntries.length && users[xpEntries[0].userId] ? [xpEntries[0].userId] : [];
+    xpEntries.forEach((entry, i) => {
+      const rank = i + 1;
+      const account = users[entry.userId];
+      if (!account) return;
+      account.achievementStats.best_rank_level = account.statOverrides?.best_rank_level ?? Math.min(statNum(account, 'best_rank_level') || Infinity, rank);
+    });
+  }
+}
+
+function startStatsClock(client) {
+  const tick = () => {
+    if (!client.isReady()) return;
+    try {
+      const data = loadEconomy();
+      for (const [guildId, guild] of Object.entries(data.guilds)) {
+        for (const id of Object.keys(guild.users || {})) getAccount(data, guildId, id, client.guilds.cache.get(guildId)?.members.cache.get(id));
+      }
+      saveEconomy(data);
+    } catch (error) { console.error('[ECONOMY STATS]: Failed to update daily records:', error); }
+  };
+  client.on('guildMemberUpdate', (_old, member) => {
+    try {
+      const data = loadEconomy();
+      if (!data.guilds[member.guild.id]?.users?.[member.id]) return;
+      getAccount(data, member.guild.id, member.id, member);
+      saveEconomy(data);
+    } catch (error) { console.error('[ECONOMY STATS]: Failed to observe income roles:', error); }
+  });
+  const timer = setInterval(tick, 60 * 1000);
+  timer.unref?.();
+  setImmediate(tick);
+}
+
+initExtraStats();
+registerRankStats();
+
 
 module.exports = {
   handleEconomyCommand,
