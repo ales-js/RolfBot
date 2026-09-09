@@ -1155,6 +1155,9 @@ function createAchievementComponents(
           `> -# 👥 **Achieved by ${percentageText}%**`,
           ...(achievement.difficulty
             ? [`> -# ${achievement.difficultyEmoji ? `${achievement.difficultyEmoji} ` : ''}**${achievement.difficulty}**`]
+            : []),
+          ...(achievement.badge
+            ? [`> -# 💠 **Badge**`]
             : [])
         ].join('\n');
     if (achievement.imageUrl && !hidden) {
