@@ -20,6 +20,10 @@ const xpStore = require('./xp-store');
 const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
+const lvlRoles = [
+  { level: 5, roleId: config.lvlRole1Id }
+];
+
 xpStore.loadXp();
 
 const client = new Client({
@@ -111,11 +115,97 @@ function startStatusRotation(readyClient) {
   setInterval(updateStatus, statusInterval);
 }
 
-client.once('ready', readyClient => {
+client.once('ready', async readyClient => {
   startStatusRotation(readyClient);
 
   console.log(`[STARTUP INFO]: logged in as ${readyClient.user.tag}`);
   console.log('[STARTUP INFO]: successfully started!');
+  console.log('[LEVEL ROLES]: starting startup check...');
+
+  let checked = 0;
+  let added = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  try {
+    const guild = await readyClient.guilds.fetch(config.guildId);
+    const members = await guild.members.fetch();
+    const users = xpStore.loadXp();
+
+    console.log(
+      `[LEVEL ROLES]: loaded ${members.size} members from ${guild.name}`
+    );
+
+    for (const member of members.values()) {
+      const label = `${member.user.tag} (${member.id})`;
+
+      if (member.user.bot) {
+        console.log(`[LEVEL ROLES]: skip ${label}: bot`);
+        skipped++;
+        continue;
+      }
+
+      checked++;
+
+      const level = xpStore.getProgress(
+        users[member.id] || { xp: 0, level: 1 }
+      ).level;
+
+      console.log(`[LEVEL ROLES]: checking ${label}: level ${level}`);
+
+      for (const reward of lvlRoles) {
+        if (!reward.roleId) {
+          console.error(
+            `[LEVEL ROLES]: err: no roleid configured for level ${reward.level}`
+          );
+          failed++;
+          continue;
+        }
+
+        if (level < reward.level) {
+          console.log(
+            `[LEVEL ROLES]: skip ${label}: needs level ${reward.level}`
+          );
+          skipped++;
+          continue;
+        }
+
+        if (member.roles.cache.has(reward.roleId)) {
+          console.log(
+            `[LEVEL ROLES]: skip ${label}: already has role ${reward.roleId}`
+          );
+          skipped++;
+          continue;
+        }
+
+        try {
+          await member.roles.add(
+            reward.roleId,
+            `Startup level check: level ${level}`
+          );
+
+          console.log(
+            `[LEVEL ROLES]: added role ${reward.roleId} to ${label}: level ${level}`
+          );
+          added++;
+        } catch (error) {
+          console.error(
+            `[LEVEL ROLES]: failed role ${reward.roleId} for ${label}:`,
+            error
+          );
+          failed++;
+        }
+      }
+    }
+  } catch (error) {
+    failed++;
+    console.error('[LEVEL ROLES]: startup check failed:', error);
+  } finally {
+    console.log(
+      `[LEVEL ROLES]: finished! ${checked} non-bot members checked, ` +
+      `${added} roles added, ${skipped} skips, ${failed} errors`
+    );
+  }
 });
 
 client.on('interactionCreate', async interaction => {
@@ -341,6 +431,25 @@ client.on('messageCreate', async message => {
     const userId = message.author.id;
     const baseXpAdd = Math.floor(Math.random() * 10) + 5;
     const result = xpStore.addXp(userId, baseXpAdd);
+
+    if (message.guild.id === config.guildId && message.member) {
+  for (const { level, roleId } of lvlRoles) {
+    if (!roleId || result.level < level) continue;
+    if (message.member.roles.cache.has(roleId)) continue;
+
+    try {
+      await message.member.roles.add(
+        roleId,
+        `Reached level ${level}`
+      );
+    } catch (error) {
+      console.error(
+        `[LEVEL ROLE ERROR]: failed to give ${roleId} to ${userId}:`,
+        error
+      );
+    }
+  }
+}
 
     if (result.leveledUp) {
       const embedColor = getUserEmbedColor(

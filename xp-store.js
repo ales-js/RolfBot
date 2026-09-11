@@ -21,7 +21,6 @@ function xpAtLevel(level) {
 function levelFromXp(totalXp) {
   requireWholeNumber(totalXp, 0, 'Total XP');
   let level = Math.floor((1 + Math.sqrt(1 + totalXp / 12.5)) / 2);
-  // Correct any floating-point rounding at an exact level boundary.
   while (50 * level * (level - 1) > totalXp) level--;
   while (50 * level * (level + 1) <= totalXp) level++;
   return level;
@@ -33,17 +32,17 @@ function validateUsers(users, legacy = false) {
   }
   for (const [userId, account] of Object.entries(users)) {
     if (!/^\d{17,20}$/.test(userId) || !account || typeof account !== 'object' || Array.isArray(account)) {
-      throw new Error(`Invalid XP account: ${userId}. No XP was changed.`);
+      throw new Error(`invalid xp account: ${userId}. no xp changed`);
     }
     requireWholeNumber(account.xp, 0, `XP for ${userId}`);
     requireWholeNumber(account.level, 1, `Level for ${userId}`);
     if (legacy) {
       if (account.xp >= account.level * 100) {
-        throw new Error(`XP for ${userId} exceeds its current level requirement. Migration stopped to preserve progress.`);
+        throw new Error(`XP for ${userId} exceeds its current level requirement.`);
       }
       requireWholeNumber(xpAtLevel(account.level) + account.xp, 0, `Total XP for ${userId}`);
     } else if (levelFromXp(account.xp) !== account.level) {
-      throw new Error(`Level and total XP disagree for ${userId}. Use /setxp or /setlevel instead of editing only one field.`);
+      throw new Error(`level and total XP disagree for ${userId}. use /setxp or /setlevel instead of editing only one field.`);
     }
   }
 }
@@ -61,14 +60,14 @@ function loadXp() {
     return {};
   }
   const raw = fs.readFileSync(xpFile, 'utf8');
-  if (!raw.trim()) throw new Error('xp.json is empty. Restore its contents before starting the bot.');
+  if (!raw.trim()) throw new Error('xp.json is empty!');
   const stored = JSON.parse(raw);
   if (stored?.format === xpFormat) {
     validateUsers(stored.users);
     return stored.users;
   }
   if (stored && Object.prototype.hasOwnProperty.call(stored, 'format')) {
-    throw new Error('Unrecognized xp.json format. No XP was changed.');
+    throw new Error('unrecognized xp.json format. no change saved');
   }
   validateUsers(stored, true);
   const converted = {};
@@ -77,10 +76,9 @@ function loadXp() {
   }
   validateUsers(converted);
   const backupFile = path.join(__dirname, `xp.before-total-xp-${Date.now()}-${randomUUID()}.json`);
-  // The original file must be backed up successfully before replacing it.
   fs.writeFileSync(backupFile, raw, { flag: 'wx' });
   saveXp(converted);
-  console.log(`[XP MIGRATION]: Converted ${Object.keys(converted).length} accounts. Backup: ${path.basename(backupFile)}`);
+  console.log(`[XP MIGRATION]: converted ${Object.keys(converted).length} accounts. backup: ${path.basename(backupFile)}`);
   return converted;
 }
 
