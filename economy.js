@@ -346,7 +346,7 @@ const giveAliases = new Set(['give', 'give-money', 'pay', 'donate']);
 const workAliases = new Set(['work', 'job']);
 const crimeAliases = new Set(['crime', 'criminal']);
 const robAliases = new Set(['rob', 'steal', 'heist', 'mug']);
-const begAliases = new Set(['beg', 'slut']);
+const begAliases = new Set(['beg']);
 const collectAliases = new Set(['collect', 'daily', 'claim']);
 const slotAliases = new Set(['slot', 'slots', 's']);
 const rouletteAliases = new Set(['roulette', 'roulete', 'roul', 'rlt', 'r']);
@@ -590,8 +590,7 @@ const helpCommandEntries = [
   {
     usage: commandUsage.roulette,
     description:
-      'Join the current server-wide roulette game or start a new one. ' +
-      'Each accepted bet restarts the 30-second timer.',
+    'Join the current roulette game or start a new one.',
     aliases: rouletteAliases
   },
   {
@@ -1880,7 +1879,7 @@ const economyEmbeds = {
 
   rouletteBetPlaced(message, bet, isNewGame) {
     return createEconomyEmbed(message, rouletteConfig.confirmationColor)
-      .setTitle(isNewGame ? 'New roulette game started!' : 'Roulette bet added!')
+      .setTitle(isNewGame ? 'new roulette game started!' : 'Roulette bet added!')
       .setDescription(
         [
           `you placed a bet of ${currencyEmoji}**${formatMoney(bet.amount)}** on ` +
@@ -1898,21 +1897,29 @@ const economyEmbeds = {
       .setDescription(
         [
           `**Usage:** ${commandUsage.roulette}`,
-          '**Example:** `?roulette 30 red`',
           '',
-          '**Outside bets**',
-          '`red`, `black`, `even`, `odd`, `low`/`1-18`, `high`/`19-36` - x2',
-          '`1st12`, `2nd12`, `3rd12`, `column1`, `column2`, `column3` - x3',
+          '`red`, `black`, `even`, `odd`, `low`/`1-18`, `high`/`19-36` = 2x multiplier',
           '',
-          '**Inside bets**',
-          '`17` straight number - x36',
-          '`1-2` split - x18',
-          '`1-2-3` street or `0-1-2` zero trio - x12',
-          '`1-2-4-5` corner or `0-1-2-3` first four - x9',
-          '`1-2-3-4-5-6` six line - x6',
+          'dozen / column = 3x multiplier',
+          'dozen example: `?roulette [ amount ] 2nd`',
+          'column example: `?roulette [ amount ] column1`',
           '',
-          'Inside combinations must touch on a real European roulette table. ' +
-            'Payout multipliers include your returned stake.'
+          'straight number = 36x multiplier',
+          'straight number example: `?roulette [ amount ] 17`',
+          '',
+          'split - 2 numbers that touch each other on the roulette table side-by-side or vertically = 18x multiplier',
+          'split example: `?roulette [ amount ] 2-5`',
+          '',
+          'street / zero trio - 3 numbers that touch each other on the roulette table horizontally = 12x multiplier',
+          'street example: `?roulette [ amount ] 24-25-26`',
+          'zero trio example: `?roulette [ amount ] 0-1-2`',
+          '',
+          'corner / first four - 4 numbers that meet at one corner of the table = 9x multiplier',
+          'corner example: `?roulette [ amount ] 7-8-10-11`',
+          'first four example: `?roulette [ amount ] 0-1-2-3`',
+          '',
+          'six line - 6 numbers that touch each other on the roulette table horizontally = 6x multiplier',
+          'six line example: `?roulette [ amount ] 13-14-15-16-17-18`',
         ].join('\n')
       );
   },

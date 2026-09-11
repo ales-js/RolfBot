@@ -1,6 +1,6 @@
 const { SlashCommandBuilder } = require('@discordjs/builders');
 const { MessageFlags } = require('discord.js');
-const { getLevelEmbed } = require('../economy');
+const { sendSlashError, logSlashError } = require('../economy-slash');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -8,21 +8,18 @@ module.exports = {
     .setDescription('Check your level stats'),
 
   async execute(interaction) {
-    if (!interaction.guildId) {
-      return interaction.reply({ content: 'use this command in a server.', flags: MessageFlags.Ephemeral });
-    }
     try {
+      if (!interaction.guildId) {
+        return await interaction.reply({ content: 'use this command in a server.', flags: MessageFlags.Ephemeral });
+      }
+      if (!interaction.deferred && !interaction.replied) await interaction.deferReply();
+      const { getLevelEmbed } = require('../economy');
       const embed = getLevelEmbed(interaction.guildId, interaction.user, interaction.member);
-      await interaction.reply({ embeds: [embed] });
+      await interaction.editReply({ embeds: [embed] });
       console.log(`[COMMAND LOG]: /level used by @${interaction.user.username} (${interaction.user.id})`);
     } catch (error) {
-      console.error('[XP ERROR]:', error);
-      const reply = {
-        content: `\`${error.message}\`\nError! Please report this to ales.js (<@1044985132777480253>)`,
-        flags: MessageFlags.Ephemeral
-      };
-      if (interaction.replied || interaction.deferred) return interaction.followUp(reply);
-      return interaction.reply(reply);
+      logSlashError(interaction, error);
+      return await sendSlashError(interaction, error);
     }
   }
 };

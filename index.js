@@ -20,7 +20,6 @@ const xpStore = require('./xp-store');
 const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
-// Validate and migrate before connecting. Invalid data stops startup, not resets it.
 xpStore.loadXp();
 
 const client = new Client({
@@ -123,26 +122,44 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   const command = client.commands.get(interaction.commandName);
-
   if (!command) return;
+
+  const receivedAge = Date.now() - interaction.createdTimestamp;
 
   try {
     await command.execute(interaction, client);
   } catch (error) {
-    console.error('[SLASH COMMAND ERROR]:', error);
+    console.error('[SLASH COMMAND ERROR]:', {
+      command: interaction.commandName,
+      code: error.code,
+      message: error.message,
+      receivedAgeMs: receivedAge,
+      failedAgeMs: Date.now() - interaction.createdTimestamp
+    });
+
+    if ([10062, 40060].includes(Number(error.code))) return;
 
     const errorResponse = {
       content:
-        `\`${error.message}\`\n` +
+        `\`${String(error.message).replace(/`/g, "'").slice(0, 1500)}\`\n` +
         'Error! Please report this to ales.js (<@1044985132777480253>)',
-      flags: MessageFlags.Ephemeral
+      flags: MessageFlags.Ephemeral,
+      allowedMentions: { parse: [] }
     };
 
-    if (interaction.replied || interaction.deferred) {
-      return interaction.followUp(errorResponse);
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp(errorResponse);
+      } else {
+        await interaction.reply(errorResponse);
+      }
+    } catch (replyError) {
+      console.error('[SLASH ERROR RESPONSE FAILED]:', {
+        command: interaction.commandName,
+        code: replyError.code,
+        message: replyError.message
+      });
     }
-
-    return interaction.reply(errorResponse);
   }
 });
 
@@ -323,7 +340,6 @@ client.on('messageCreate', async message => {
   try {
     const userId = message.author.id;
     const baseXpAdd = Math.floor(Math.random() * 10) + 5;
-    // Read fresh data and save before any Discord reply can yield control.
     const result = xpStore.addXp(userId, baseXpAdd);
 
     if (result.leveledUp) {

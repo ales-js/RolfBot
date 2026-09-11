@@ -1,0 +1,25 @@
+const { SlashCommandBuilder } = require('@discordjs/builders');
+const { runEconomySlash } = require('../economy-slash');
+
+module.exports = {
+  data: new SlashCommandBuilder()
+    .setName("roulette")
+    .setDescription("Join the current roulette game or start a new one.")
+    .setContexts(0)
+    .addStringOption(option => option
+      .setName("amount")
+      .setDescription("[ amount | all | half | quarter ]")
+      .setRequired(true)
+      .setMinLength(1)
+      .setMaxLength(100))
+    .addStringOption(option => option
+      .setName("space")
+      .setDescription("[ space ]")
+      .setRequired(true)
+      .setMinLength(1)
+      .setMaxLength(100)),
+
+  async execute(interaction) {
+    return runEconomySlash(interaction, "roulette");
+  }
+};
