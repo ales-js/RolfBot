@@ -14,7 +14,7 @@
     "You harvested potatoes for the LPG and were rewarded with {amount}.",
     "You restocked the Konsum before the queue noticed and earned {amount}.",
     "You polished lamps at the Palast der Republik and received {amount}.",
-    "You stamped 347 forms at the Rat des Kreises and earned {amount}.",
+    "You stamped 283 forms at the Rat des Kreises and earned {amount}.",
     "You completed an FDJ Arbeitseinsatz and somehow came home with {amount}.",
     "You tuned the PA system before IFA Wartburg took the stage and earned {amount}.",
     "You printed posters for “Wenn IFA Wartburg Spielt” and received {amount}.",
@@ -25,7 +25,9 @@
     "You repaired the Jugendklub cassette deck just before the IFA Wartburg tape started and earned {amount}.",
     "You drove the band to the Kulturhaus in a Wartburg Tourist and received {amount}.",
     "You packed Kosmoskost rations for the next IFA Wartburg tour and earned {amount}.",
-    "You recorded a state-approved banger for Rundfunk der DDR and earned {amount}."
+    "You recorded a state-approved banger for Rundfunk der DDR and earned {amount}.",
+    "You sold rare fish and earned {amount}.",
+    "You earned {amount} from your potato farm in Lithuania."
   ],
   "work_cooldown": [
     "The Brigadeleiter checked the Schichtplan: your next assignment begins {time}.",

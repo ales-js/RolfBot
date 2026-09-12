@@ -438,8 +438,8 @@ const stopwatchEmoji = '<:RolfBot_stopwatch:1544698730639261748>';
 
 const commandUsage = {
   balance: '`?balance [ @mention | username | userID ]`',
-  deposit: '`?deposit [ amount | all | half | quarter ]`',
-  withdraw: '`?withdraw [ amount | all | half | quarter ]`',
+  deposit: '`?deposit [ amount | all | half | quarter | debt ]`',
+  withdraw: '`?withdraw [ amount | all | half | quarter | debt ]`',
   give: '`?give [ @mention | username | userID ] [ amount | all | half | quarter ]`',
   work: '`?work`',
   crime: '`?crime`',
@@ -644,30 +644,30 @@ const cooldownText = {
 };
 
 const economyMessages = {
-  unexpectedError(errorMessage) {
+  unexpectedError(errorMessage, message) {
     return (
-      `\`${errorMessage}\`\n` + 'Error! Please report this to ales.js ' + '(<@1044985132777480253>)'
+      `\`${errorMessage}\`\n` + 'Error! Please report this to ales.js ' + `(${message ? userMention(message, '1044985132777480253') : '<@1044985132777480253>'})`
     );
   },
 
-  leaderboardWrongUser(userId) {
-    return `only <@${userId}> can use these ` + 'leaderboard buttons.';
+  leaderboardWrongUser(userId, message) {
+    return `only ${userMention(message, userId)} can use these ` + 'leaderboard buttons.';
   },
 
-  helpWrongUser(userId) {
-    return `only <@${userId}> can use these help buttons.`;
+  helpWrongUser(userId, message) {
+    return `only ${userMention(message, userId)} can use these help buttons.`;
   },
 
-  shopWrongUser(userId) {
-    return `only <@${userId}> can use these shop buttons.`;
+  shopWrongUser(userId, message) {
+    return `only ${userMention(message, userId)} can use these shop buttons.`;
   },
 
-  achievementsWrongUser(userId) {
-    return `only <@${userId}> can use these achievement buttons.`;
+  achievementsWrongUser(userId, message) {
+    return `only ${userMention(message, userId)} can use these achievement buttons.`;
   },
 
-  statsWrongUser(userId) {
-    return `only <@${userId}> can use these statistics buttons.`;
+  statsWrongUser(userId, message) {
+    return `only ${userMention(message, userId)} can use these statistics buttons.`;
   }
 };
 
@@ -981,6 +981,27 @@ function createShopComponents(
     components.push(createShopButtons(currentPage, totalPages, disableAll));
   }
   return components;
+}
+
+function addMentionBadges(text, guildId) {
+  if (!guildId || !/<@!?\d+>/.test(text)) return text;
+  try {
+    if (!fs.existsSync(economyFile) || !fs.existsSync(achievementsFile)) return text;
+    const users = JSON.parse(readJsonText(economyFile)).guilds?.[guildId]?.users || {};
+    const achievements = loadAchievements();
+    return text.replace(/<@!?(\d+)>/g, (mention, userId, offset) => {
+      const badges = getLeaderboardBadges(users[userId], achievements);
+      if (!badges || text.slice(0, offset).endsWith(`${badges} `)) return mention;
+      return `${badges} ${mention}`;
+    });
+  } catch (error) {
+    console.error('[ECONOMY ERROR]: Failed to load mention badges:', error);
+    return text;
+  }
+}
+
+function userMention(message, userId) {
+  return addMentionBadges(`<@${userId}>`, message.guild?.id || message.guildId);
 }
 
 function createEconomyEmbed(message, color, author = message.author) {
@@ -1517,13 +1538,13 @@ const economyEmbeds = {
 
   robImmune(message, target) {
     return createEconomyEmbed(message, failEmbedColor).setDescription(
-      `**${target.username}** has Robbing Immunity and can't be robbed. you can buy this aswell using \`?shop\`!`
+      `${userMention(message, target.id)} has Robbing Immunity and can't be robbed. you can buy this aswell using \`?shop\`!`
     );
   },
 
   robEmptyWallet(message, target) {
     return createEconomyEmbed(message, failEmbedColor).setDescription(
-      `**${target.username}** is too broke and doesn't have any money in their wallet to rob.`
+      `${userMention(message, target.id)} is too broke and doesn't have any money in their wallet to rob.`
     );
   },
 
@@ -1537,7 +1558,7 @@ const economyEmbeds = {
   robSuccess(message, account, target, stolenMoney, stolenPercentage) {
     return createEconomyEmbed(message, account.settings.embedColor)
       .setDescription(
-        `You successfully robbed **${target.username}** and stole ` +
+        `You successfully robbed ${userMention(message, target.id)} and stole ` +
           `${currencyEmoji}**${formatMoney(stolenMoney)}**`
       )
       .setTimestamp();
@@ -1546,7 +1567,7 @@ const economyEmbeds = {
   robFail(message, target, fine) {
     return createEconomyEmbed(message, failEmbedColor)
       .setDescription(
-        `You were caught trying to rob **${target.username}** and were fined ` +
+        `You were caught trying to rob ${userMention(message, target.id)} and were fined ` +
           `${currencyEmoji}**${formatMoney(fine)}**.`
       )
       .setTimestamp();
@@ -1611,6 +1632,15 @@ const economyEmbeds = {
     );
   },
 
+  depositNoDebt(message, bank) {
+    return createEconomyEmbed(message, failEmbedColor).setDescription(
+      [
+        "you don't have any debt in your bank to clear.",
+        `**Bank:** ${currencyEmoji}${formatMoney(bank)}`
+      ].join('\n')
+    );
+  },
+
   depositSuccess(message, account, amount, total) {
     return createEconomyEmbed(message, account.settings.embedColor)
       .setDescription(
@@ -1664,6 +1694,15 @@ const economyEmbeds = {
       [
         "you're broke. you don't have any money in your bank to withdraw.",
         `**Bank:** ${currencyEmoji}${formatMoney(bank)}`
+      ].join('\n')
+    );
+  },
+
+  withdrawNoDebt(message, wallet) {
+    return createEconomyEmbed(message, failEmbedColor).setDescription(
+      [
+        "you don't have any debt in your wallet to clear.",
+        `**Wallet:** ${currencyEmoji}${formatMoney(wallet)}`
       ].join('\n')
     );
   },
@@ -1747,7 +1786,7 @@ const economyEmbeds = {
   giveSuccess(message, account, target, amount) {
     const total = account.wallet + account.bank;
     return createEconomyEmbed(message, account.settings.embedColor)
-      .setDescription(`you gave **${target.username}** ${currencyEmoji}**${formatMoney(amount)}**.`)
+      .setDescription(`you gave ${userMention(message, target.id)} ${currencyEmoji}**${formatMoney(amount)}**.`)
       .setTimestamp();
   },
 
@@ -1924,7 +1963,7 @@ const economyEmbeds = {
       );
   },
 
-  rouletteResult(number, summaries) {
+  rouletteResult(number, summaries, guildId) {
     const numberColor = getRouletteNumberColor(number);
     const winners = summaries.filter((summary) => summary.net > 0);
     const losers = summaries.filter((summary) => summary.net < 0);
@@ -1943,19 +1982,19 @@ const economyEmbeds = {
     if (winners.length > 0) {
       embed.addFields({
         name: 'Winners',
-        value: formatRouletteSummaries(winners, 'won')
+        value: formatRouletteSummaries(winners, 'won', guildId)
       });
     }
     if (losers.length > 0) {
       embed.addFields({
         name: 'Losers',
-        value: formatRouletteSummaries(losers, 'lost')
+        value: formatRouletteSummaries(losers, 'lost', guildId)
       });
     }
     if (breakEven.length > 0) {
       embed.addFields({
         name: 'No net change',
-        value: formatRouletteSummaries(breakEven, 'broke even')
+        value: formatRouletteSummaries(breakEven, 'broke even', guildId)
       });
     }
     return embed;
@@ -2955,9 +2994,9 @@ function getNextDailyIncomeReset(timestamp) {
   return resetTimestamp;
 }
 
-function formatError(error) {
+function formatError(error, message) {
   const errorMessage = error instanceof Error ? error.message : String(error);
-  return economyMessages.unexpectedError(errorMessage);
+  return economyMessages.unexpectedError(errorMessage, message);
 }
 
 function normalizeHexColor(input) {
@@ -3153,7 +3192,7 @@ function rouletteBetWins(bet, number) {
   return bet.key === 'column3' && number % 3 === 0;
 }
 
-function formatRouletteSummaries(summaries, resultWord) {
+function formatRouletteSummaries(summaries, resultWord, guildId) {
   const maximumDisplayedUsers = 15;
   const lines = summaries.slice(0, maximumDisplayedUsers).map((summary) => {
     if (summary.net === 0) {
@@ -3167,7 +3206,7 @@ function formatRouletteSummaries(summaries, resultWord) {
   if (summaries.length > maximumDisplayedUsers) {
     lines.push(`...and ${summaries.length - maximumDisplayedUsers} more`);
   }
-  return lines.join('\n');
+  return addMentionBadges(lines.join('\n'), guildId);
 }
 
 function scheduleRouletteGame(game) {
@@ -3317,7 +3356,7 @@ async function settleRouletteGame(game) {
   clearTimeout(game.timer);
   rouletteGames.delete(game.guildId);
   game.helpCollector?.stop('roulette_finished');
-  const embed = economyEmbeds.rouletteResult(number, summaries);
+  const embed = economyEmbeds.rouletteResult(number, summaries, game.guildId);
   await sendRouletteEmbed(game, embed);
   for (const achievementMessage of game.achievementMessages?.values() || []) {
     await checkAndAnnounceAchievements(achievementMessage);
@@ -3376,7 +3415,7 @@ async function showHelp(message) {
       try {
         if (interaction.user.id !== message.author.id) {
           await interaction.reply({
-            content: economyMessages.helpWrongUser(message.author.id),
+            content: economyMessages.helpWrongUser(message.author.id, message),
             flags: MessageFlags.Ephemeral,
             allowedMentions: {
               parse: []
@@ -3428,7 +3467,7 @@ async function showHelp(message) {
         if (!interaction.replied && !interaction.deferred) {
           await interaction
             .reply({
-              content: formatError(error),
+              content: formatError(error, message),
               flags: MessageFlags.Ephemeral
             })
             .catch(() => {});
@@ -3445,7 +3484,7 @@ async function showHelp(message) {
     return helpMessage;
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to show help:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -3464,7 +3503,7 @@ async function showLevel(message, args = []) {
     return message.reply({ embeds: [embed] });
   } catch (error) {
     console.error('[XP ERROR]: Failed to show level:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -3494,7 +3533,7 @@ async function showBalance(message, args = []) {
     });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to show balance:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -3540,7 +3579,7 @@ async function showCooldowns(message, args = []) {
     return message.reply({ embeds: [economyEmbeds.cooldowns(message, account, fields)] });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to show cooldowns:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -3577,7 +3616,7 @@ async function showStats(message, args = []) {
       try {
         if (interaction.user.id !== message.author.id) {
           await interaction.reply({
-            content: economyMessages.statsWrongUser(message.author.id),
+            content: economyMessages.statsWrongUser(message.author.id, message),
             flags: MessageFlags.Ephemeral,
             allowedMentions: {
               parse: []
@@ -3637,7 +3676,7 @@ async function showStats(message, args = []) {
         if (!interaction.replied && !interaction.deferred) {
           await interaction
             .reply({
-              content: formatError(error),
+              content: formatError(error, message),
               flags: MessageFlags.Ephemeral
             })
             .catch(() => {});
@@ -3654,7 +3693,7 @@ async function showStats(message, args = []) {
     return statsMessage;
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to show statistics:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -3725,7 +3764,7 @@ async function showLeaderboardCategories(message) {
       try {
         if (interaction.user.id !== message.author.id) {
           await interaction.reply({
-            content: economyMessages.leaderboardWrongUser(message.author.id),
+            content: economyMessages.leaderboardWrongUser(message.author.id, message),
             flags: MessageFlags.Ephemeral,
             allowedMentions: {
               parse: []
@@ -3776,7 +3815,7 @@ async function showLeaderboardCategories(message) {
         if (!interaction.replied && !interaction.deferred) {
           await interaction
             .reply({
-              content: formatError(error),
+              content: formatError(error, message),
               flags: MessageFlags.Ephemeral
             })
             .catch(() => {});
@@ -3852,7 +3891,7 @@ async function showLeaderboard(message, args = []) {
       try {
         if (interaction.user.id !== message.author.id) {
           await interaction.reply({
-            content: economyMessages.leaderboardWrongUser(message.author.id),
+            content: economyMessages.leaderboardWrongUser(message.author.id, message),
             flags: MessageFlags.Ephemeral,
             allowedMentions: {
               parse: []
@@ -3910,7 +3949,7 @@ async function showLeaderboard(message, args = []) {
         if (!interaction.replied && !interaction.deferred) {
           await interaction
             .reply({
-              content: formatError(error),
+              content: formatError(error, message),
               flags: MessageFlags.Ephemeral
             })
             .catch(() => {});
@@ -3928,7 +3967,7 @@ async function showLeaderboard(message, args = []) {
     return leaderboardMessage;
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to show leaderboard:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -3972,7 +4011,7 @@ async function showAchievements(message, args = []) {
       try {
         if (interaction.user.id !== message.author.id) {
           await interaction.reply({
-            content: economyMessages.achievementsWrongUser(message.author.id),
+            content: economyMessages.achievementsWrongUser(message.author.id, message),
             flags: MessageFlags.Ephemeral,
             allowedMentions: {
               parse: []
@@ -4033,7 +4072,7 @@ async function showAchievements(message, args = []) {
         if (!interaction.replied && !interaction.deferred) {
           await interaction
             .reply({
-              content: formatError(error),
+              content: formatError(error, message),
               flags: MessageFlags.Ephemeral
             })
             .catch(() => {});
@@ -4057,7 +4096,7 @@ async function showAchievements(message, args = []) {
     return achievementMessage;
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to show achievements:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -4098,7 +4137,7 @@ async function work(message) {
     });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to work:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -4182,7 +4221,7 @@ async function collectDailyIncome(message, args = []) {
     });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to collect daily income:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -4241,7 +4280,7 @@ async function crime(message) {
     });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to commit crime:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -4362,7 +4401,7 @@ async function rob(message, args = []) {
     });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to rob user:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -4399,7 +4438,7 @@ async function beg(message) {
     });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to beg:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -4415,7 +4454,15 @@ async function deposit(message, args) {
       });
     }
     let amount;
-    if (requestedAmount === 'all') {
+    if (requestedAmount === 'debt') {
+      if (account.bank >= 0) {
+        const embed = economyEmbeds.depositNoDebt(message, account.bank);
+        return message.reply({
+          embeds: [embed]
+        });
+      }
+      amount = -account.bank;
+    } else if (requestedAmount === 'all') {
       amount = account.wallet;
     } else if (requestedAmount === 'half') {
       amount = Math.floor(account.wallet / 2);
@@ -4467,7 +4514,7 @@ async function deposit(message, args) {
     });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to deposit:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -4483,7 +4530,15 @@ async function withdraw(message, args) {
       });
     }
     let amount;
-    if (requestedAmount === 'all') {
+    if (requestedAmount === 'debt') {
+      if (account.wallet >= 0) {
+        const embed = economyEmbeds.withdrawNoDebt(message, account.wallet);
+        return message.reply({
+          embeds: [embed]
+        });
+      }
+      amount = -account.wallet;
+    } else if (requestedAmount === 'all') {
       amount = account.bank;
     } else if (requestedAmount === 'half') {
       amount = Math.floor(account.bank / 2);
@@ -4535,7 +4590,7 @@ async function withdraw(message, args) {
     });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to withdraw:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -4639,7 +4694,7 @@ async function giveMoney(message, args) {
     });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to give money:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -4709,7 +4764,7 @@ async function slot(message, args) {
     });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to use slots:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -4815,7 +4870,7 @@ async function roulette(message, args) {
     return rouletteMessage;
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to place roulette bet:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -4845,7 +4900,7 @@ async function showShop(message, args) {
       try {
         if (interaction.user.id !== message.author.id) {
           await interaction.reply({
-            content: economyMessages.shopWrongUser(message.author.id),
+            content: economyMessages.shopWrongUser(message.author.id, message),
             flags: MessageFlags.Ephemeral,
             allowedMentions: {
               parse: []
@@ -5036,7 +5091,7 @@ async function showShop(message, args) {
         if (!interaction.replied && !interaction.deferred) {
           await interaction
             .reply({
-              content: formatError(error),
+              content: formatError(error, message),
               flags: MessageFlags.Ephemeral
             })
             .catch(() => {});
@@ -5059,7 +5114,7 @@ async function showShop(message, args) {
     return shopMessage;
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to show shop:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -5069,7 +5124,7 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
   const container = new ContainerBuilder()
     .setAccentColor(Number.parseInt(account.settings.embedColor.slice(1), 16))
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-      '## Badge Settings\nChoose which earned badges appear before your name on leaderboards. you can get badges by completing difficult achievements. use `?achievements` and look for emojis in front of achievement names.'
+      '## Badge Settings\nChoose which earned badges appear before your name and mentions throughout the bot. you can get badges by completing difficult achievements. use `?achievements` and look for emojis in front of achievement names.'
     ));
   for (const badge of badges.slice(page * 5, page * 5 + 5)) {
     const owned = account.achievements.includes(badge.id);
@@ -5079,7 +5134,7 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
     container.addSectionComponents(new SectionBuilder()
       .addTextDisplayComponents(new TextDisplayBuilder().setContent(secret
         ? '### 🔒 Hidden Badge\nUnlock its achievement to discover it.'
-        : `### ${badge.badge} ${badge.name}\n${badge.description}\n-# ${!owned ? '🔒 Locked' : hidden ? 'Hidden on leaderboards' : 'Shown on leaderboards'}`))
+        : `### ${badge.badge} ${badge.name}\n${badge.description}\n-# ${!owned ? '🔒 Locked' : hidden ? 'Hidden everywhere' : 'Shown everywhere'}`))
       .setButtonAccessory(new ButtonBuilder()
         .setCustomId(`badge_toggle:${badge.id}`)
         .setLabel(!owned ? 'Locked' : hidden ? 'Show' : 'Hide')
@@ -5195,7 +5250,7 @@ async function showSettings(message, args) {
     });
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to update settings:', error);
-    return message.reply(formatError(error));
+    return message.reply(formatError(error, message));
   }
 }
 
@@ -5248,7 +5303,7 @@ async function replyAdmin(message, description, failed = false, title = 'RolfBot
   }
   const embed = createEconomyEmbed(message, failed ? failEmbedColor : color)
     .setTitle(title)
-    .setDescription(description)
+    .setDescription(addMentionBadges(description, message.guild.id))
     .setTimestamp();
   return message.reply({
     embeds: [embed],
