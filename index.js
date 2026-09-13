@@ -17,6 +17,7 @@ const {
   getUserEmbedColor
 } = require('./economy');
 const xpStore = require('./xp-store');
+const activityStore = require('./activity-store');
 
 const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -32,9 +33,12 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.MessageContent
   ]
 });
+
+activityStore.start(client);
 
 client.commands = new Collection();
 
@@ -118,6 +122,8 @@ function startStatusRotation(readyClient) {
 
 client.once('ready', readyClient => {
   startStatusRotation(readyClient);
+  const activityGuild = readyClient.guilds.cache.get(config.guildId);
+  if (activityGuild) activityStore.scanMessages(activityGuild);
 
   console.log(`[STARTUP INFO]: logged in as ${readyClient.user.tag}`);
   console.log(`[STARTUP INFO]: successfully started! v${config.version}`);
@@ -438,6 +444,12 @@ client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
 
   try {
+    activityStore.recordMessage(message);
+  } catch (error) {
+    console.error('[ACTIVITY ERROR]: Failed to count message:', error);
+  }
+
+  try {
     await handleEconomyCommand(message);
   } catch (error) {
     console.error('[ECONOMY COMMAND ERROR]:', error);
@@ -504,6 +516,10 @@ rl.on('line', input => {
   if (cmd === 're') {
     console.log('[CONSOLE INFO]: restarting...');
     process.exit(0);
+  } else if (cmd === 'check messages') {
+    const guild = client.guilds.cache.get(config.guildId);
+    if (!client.isReady() || !guild) console.log('[MESSAGES]: bot is not ready yet.');
+    else activityStore.scanMessages(guild, true);
   } else if (cmd === 'check lvlrole1') {
     checkLvlRole1(client).catch(error => {
       console.error('[LEVEL ROLES]: check failed:', error);

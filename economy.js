@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomInt } = require('crypto');
 const xpStore = require('./xp-store');
+const activityStore = require('./activity-store');
 const {
   ActionRowBuilder,
   ButtonBuilder,
@@ -1091,6 +1092,10 @@ function isMoneyStatistic(statName) {
 
 function formatStatisticValue(statName, value) {
   const def = extraStats.get(statName);
+  if (def?.type === 'duration') {
+    const seconds = Math.floor(value);
+    return `**${Math.floor(seconds / 3600).toLocaleString('en-US')}h ${Math.floor(seconds / 60) % 60}m ${seconds % 60}s**`;
+  }
   if (def?.type === 'rank' && !value) return '**—**';
   if (def?.type === 'percent') return `**${statDecimals.format(value)}%**`;
   const formattedValue = def ? statDecimals.format(value) : formatMoney(value);
@@ -1236,15 +1241,27 @@ function createAchievementComponents(
 
 const economyEmbeds = {
   level(message, progress) {
-    const filled = Math.floor(progress.progressXp / progress.requiredXp * 20);
-    const bar = '[' + '#'.repeat(filled) + '-'.repeat(20 - filled) + ']';
+    const filled = Math.max(0, Math.min(12, Math.round(progress.progressXp / progress.requiredXp * 12)));
+    const bar = '[' + '▰'.repeat(filled) + '▱'.repeat(12 - filled) + ']';
     const percentage = (progress.progressXp / progress.requiredXp * 100).toFixed(1);
+    const activity = activityStore.getStats(message.guild.id, message.author.id);
+    const seconds = Math.floor(activity.voiceMs / 1000);
+    const voiceTime = `${Math.floor(seconds / 3600).toLocaleString('en-US')}h ${Math.floor(seconds / 60) % 60}m ${seconds % 60}s`;
+    const rank = getLevelLeaderboardEntries().findIndex(entry => entry.userId === message.author.id) + 1;
     return createEconomyEmbed(message, getUserEmbedColor(message.guild.id, message.author.id, message.member))
       .setDescription([
-        `**Level:** ${progress.level} (${formatXp(progress.remainingXp)} XP required for Lv. ${progress.level + 1})`,
-        `**XP:** ${formatXp(progress.totalXp)} XP`,
-        `### \`Lv. ${progress.level} ${bar} Lv. ${progress.level + 1}\``,
+        `> Leaderboard Rank: **${rank || 'Unranked'}**`,
+        `> XP: **${progress.progressXp.toLocaleString('en-US')} / ${progress.requiredXp.toLocaleString('en-US')}** (${progress.totalXp.toLocaleString('en-US')} total)`,
+        `> Time spent in VC: **${voiceTime}**`,
+        `> Messages Sent: **${activity.messages.toLocaleString('en-US')}**${activityStore.getHistoryStatus(message.guild.id) !== 'complete' ? ' (history scan pending)' : ''}`
       ].join('\n'))
+      .addFields(
+        {
+          name: `Level ${progress.level}`,
+          value: `\`${bar}\` ${percentage}%`,
+          inline: false
+        }
+      )
       .setTimestamp();
   },
 
@@ -1390,6 +1407,7 @@ const economyEmbeds = {
   },
 
   stats(message, account, currentPage, totalPages) {
+    syncExtraStats(account, message.member);
     const startIndex = currentPage * statsConfig.statisticsPerPage;
     const pageStatisticNames = statisticNames.slice(
       startIndex,
@@ -2618,6 +2636,7 @@ function getAccount(data, guildId, userId, member) {
   if (typeof account.settings.embedColor !== 'string') {
     account.settings.embedColor = memberDefaultEmbedColor;
   }
+  activityAccounts.set(account, { guildId, userId });
   syncExtraStats(account, member);
   return account;
 }
@@ -2857,6 +2876,16 @@ function getLeaderboardValue(account, category) {
 
 function getLeaderboardEntries(data, guildId, category) {
   const users = data.guilds[guildId]?.users || {};
+  if (category === 'messages_sent' || category === 'vc_time') {
+    return [...new Set([...Object.keys(users), ...activityStore.getUserIds(guildId)])]
+      .map(userId => {
+        const activity = activityStore.getStats(guildId, userId);
+        const value = users[userId]?.statOverrides?.[category] ??
+          (category === 'messages_sent' ? activity.messages : Math.floor(activity.voiceMs / 1000));
+        return { userId, value };
+      })
+      .sort((a, b) => b.value - a.value || a.userId.localeCompare(b.userId));
+  }
   const entries = Object.entries(users)
     .map(([userId, account]) => ({
       userId,
@@ -5878,6 +5907,7 @@ function getUserEmbedColor(guildId, userId, member) {
 }
 
 const extraStats = new Map();
+const activityAccounts = new WeakMap();
 const statsSession = require('crypto').randomUUID();
 const statDecimals = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 let statsDefs = { achievements: [], items: [] };
@@ -5906,7 +5936,16 @@ function statNum(account, key) {
   return Number.isFinite(value) ? value : 0;
 }
 
+function readActivityStat(account, key) {
+  const ref = activityAccounts.get(account);
+  if (!ref) return statNum(account, key);
+  const activity = activityStore.getStats(ref.guildId, ref.userId);
+  return key === 'messages_sent' ? activity.messages : Math.floor(activity.voiceMs / 1000);
+}
+
 function initExtraStats() {
+  addStat('messages_sent', 'Messages sent', 'count', account => readActivityStat(account, 'messages_sent'));
+  addStat('vc_time', 'Time spent in VC', 'duration', account => readActivityStat(account, 'vc_time'));
   const count = (key, label) => addStat(key, label);
   const money = (key, label, signed = false) => addStat(key, label, 'money', null, signed);
   const ratio = (key, label, top, bottom, percent = false) => addStat(key, label,
@@ -6223,6 +6262,7 @@ function updateRankRecords(data, now = Date.now()) {
       eligible.forEach((entry, i) => {
         const rank = i + 1;
         const account = users[entry.userId];
+        if (!account) return;
         const key = `best_rank_${cat}`;
         account.achievementStats[key] = account.statOverrides?.[key] ?? Math.min(statNum(account, key) || Infinity, rank);
       });
@@ -6247,7 +6287,7 @@ function startStatsClock(client) {
         for (const id of Object.keys(guild.users || {})) getAccount(data, guildId, id, client.guilds.cache.get(guildId)?.members.cache.get(id));
       }
       saveEconomy(data);
-    } catch (error) { console.error('[ECONOMY STATS]: Failed to update daily records:', error); }
+    } catch (error) { console.error('[ECONOMY STATS]: failed to update daily records:', error); }
   };
   client.on('guildMemberUpdate', (_old, member) => {
     try {
@@ -6255,7 +6295,7 @@ function startStatsClock(client) {
       if (!data.guilds[member.guild.id]?.users?.[member.id]) return;
       getAccount(data, member.guild.id, member.id, member);
       saveEconomy(data);
-    } catch (error) { console.error('[ECONOMY STATS]: Failed to observe income roles:', error); }
+    } catch (error) { console.error('[ECONOMY STATS]: failed to observe income roles:', error); }
   });
   const timer = setInterval(tick, 60 * 1000);
   timer.unref?.();
