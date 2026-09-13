@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 const {
   ActivityType,
   Client,
@@ -115,12 +116,26 @@ function startStatusRotation(readyClient) {
   setInterval(updateStatus, statusInterval);
 }
 
-client.once('ready', async readyClient => {
+client.once('ready', readyClient => {
   startStatusRotation(readyClient);
 
   console.log(`[STARTUP INFO]: logged in as ${readyClient.user.tag}`);
-  console.log('[STARTUP INFO]: successfully started!');
-  console.log('[LEVEL ROLES]: starting startup check...');
+  console.log(`[STARTUP INFO]: successfully started! v${config.version}`);
+});
+
+let checkingLvlRole1 = false;
+
+async function checkLvlRole1(readyClient) {
+  if (!readyClient.isReady()) {
+    console.log('[LEVEL ROLES]: bot is not ready yet.');
+    return;
+  }
+  if (checkingLvlRole1) {
+    console.log('[LEVEL ROLES]: check already running.');
+    return;
+  }
+  checkingLvlRole1 = true;
+  console.log('[LEVEL ROLES]: starting check...');
 
   let checked = 0;
   let added = 0;
@@ -181,7 +196,7 @@ client.once('ready', async readyClient => {
         try {
           await member.roles.add(
             reward.roleId,
-            `Startup level check: level ${level}`
+            `Manual level check: level ${level}`
           );
 
           console.log(
@@ -199,14 +214,15 @@ client.once('ready', async readyClient => {
     }
   } catch (error) {
     failed++;
-    console.error('[LEVEL ROLES]: startup check failed:', error);
+    console.error('[LEVEL ROLES]: check failed:', error);
   } finally {
+    checkingLvlRole1 = false;
     console.log(
       `[LEVEL ROLES]: finished! ${checked} non-bot members checked, ` +
       `${added} roles added, ${skipped} skips, ${failed} errors`
     );
   }
-});
+}
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
@@ -475,3 +491,29 @@ client.on('messageCreate', async message => {
 });
 
 client.login(config.token);
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
+
+rl.on('line', input => {
+  const cmd = input.trim().toLowerCase();
+  if (!cmd) return;
+
+  if (cmd === 're') {
+    console.log('[CONSOLE INFO]: restarting...');
+    process.exit(0);
+  } else if (cmd === 'check lvlrole1') {
+    checkLvlRole1(client).catch(error => {
+      console.error('[LEVEL ROLES]: check failed:', error);
+    });
+  } else if (cmd === 'exit') {
+    console.log('[CONSOLE INFO]: shutting down...');
+    process.exit(42);
+  } else {
+    console.log(`[CONSOLE ERROR]: unknown command '${cmd}'`);
+  }
+});
+
+rl.on('SIGINT', () => process.exit(42));

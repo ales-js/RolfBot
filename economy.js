@@ -34,6 +34,7 @@ const {
 const economyFile = path.join(__dirname, 'economy.json');
 const shopItemsFile = path.join(__dirname, 'shop_items.json');
 const achievementsFile = path.join(__dirname, 'achievements.json');
+const creditsFile = path.join(__dirname, 'credits.json');
 const commandPrefix = '?';
 const failEmbedColor = '#ff5050';
 const configPath = path.join(__dirname, 'config.json');
@@ -338,6 +339,7 @@ const colorRoleIds = [
   '1542606235549962302' // Black
 ];
 
+const creditsAliases = new Set(['credits']);
 const helpAliases = new Set(['help', 'commands', 'command', 'cmd', 'cmds', 'h']);
 const balanceAliases = new Set(['bal', 'balance', 'money', 'cash', 'wallet', 'bank', 'b']);
 const depositAliases = new Set(['dep', 'deposit', 'transfer', 'd']);
@@ -429,6 +431,7 @@ const commandAliasGroups = new Map([
   ['deposit', depositAliases],
   ['withdraw', withdrawAliases],
   ['give', giveAliases],
+  ['credits', creditsAliases],
   ['help', helpAliases]
 ]);
 
@@ -458,6 +461,7 @@ const commandUsage = {
   color: '`?color [ reset | #HEXHEX ]`',
   colorHex: '`?color #HEXHEX`',
   badges: '?badges',
+  credits: '`?credits`',
   help: '`?help`'
 };
 
@@ -542,7 +546,7 @@ const helpCommandEntries = [
   },
   {
     usage: commandUsage.work,
-    description: 'Work to earn Ostmark. pays 250-750',
+    description: 'Work to earn some money. pays 250-750',
     aliases: workAliases
   },
   {
@@ -555,7 +559,7 @@ const helpCommandEntries = [
   {
     usage: commandUsage.crime,
     description:
-      `Commit a crime for a chance to earn a lot of Ostmark... or lose a lot. ` +
+      `Commit a crime for a chance to earn a lot of money... or lose a lot. ` +
       `(${crimeConfig.successChance}% base success rate, ` +
       `${crimeConfig.minimumPay}-${crimeConfig.maximumPay} pay, ` +
       `${crimeConfig.minimumFine}-${crimeConfig.maximumFine} fine, ` +
@@ -574,7 +578,7 @@ const helpCommandEntries = [
   },
   {
     usage: commandUsage.beg,
-    description: 'Beg strangers for a small but guaranteed amount of Ostmark. pays 25-150',
+    description: 'Beg strangers for a small but guaranteed amount of money. pays 25-150',
     aliases: begAliases
   },
   {
@@ -622,6 +626,11 @@ const helpCommandEntries = [
     usage: commandUsage.settings,
     description: 'View all available RolfBot Economy settings.',
     aliases: settingsAliases
+  },
+  {
+    usage: commandUsage.credits,
+    description: 'See everyone who contributed to RolfBot.',
+    aliases: creditsAliases
   },
   {
     usage: commandUsage.help,
@@ -3388,6 +3397,54 @@ function startRouletteHelpCollector(game, rouletteMessage) {
   });
 }
 
+async function showCredits(message) {
+  try {
+    const data = JSON.parse(readJsonText(creditsFile));
+    if (!Array.isArray(data.credits)) {
+      throw new Error('credits.json must contain a "credits" array.');
+    }
+    const entries = data.credits.map((entry, index) => {
+      if (!entry || typeof entry.user !== 'string' || !entry.user.trim() ||
+          typeof entry.description !== 'string' || !entry.description.trim()) {
+        throw new Error(`invalid credits.json entry ${index + 1}!`);
+      }
+      const user = entry.user.trim();
+      const mention = user.match(/^<@!?(\d{17,20})>$/);
+      const name = mention ? userMention(message, mention[1]) : user;
+      return `- **${name}** \n  - ${entry.description.trim()}`;
+    });
+    const pages = [];
+    let page = '';
+    for (const entry of entries) {
+      if (entry.length > 3800) {
+        throw new Error('credits.json desc too long!');
+      }
+      if (page && page.length + entry.length + 2 > 3800) {
+        pages.push(page);
+        page = '';
+      }
+      page += (page ? '\n\n' : '') + entry;
+    }
+    pages.push(page || 'err empty credits.json');
+    const color = getUserEmbedColor(message.guild.id, message.author.id, message.member);
+    for (let i = 0; i < pages.length; i++) {
+      const embed = createEconomyEmbed(message, color)
+        .setTitle('RolfBot Credits')
+        .setDescription(pages[i]);
+      if (pages.length > 1) {
+        embed.setFooter({ text: `Page ${i + 1}/${pages.length}` });
+      }
+      await message.reply({
+        embeds: [embed],
+        allowedMentions: { parse: [], repliedUser: false }
+      });
+    }
+  } catch (error) {
+    console.error('[ECONOMY ERROR]: failed to show credits:', error);
+    return message.reply(formatError(error, message));
+  }
+}
+
 async function showHelp(message) {
   try {
     const economyData = loadEconomy();
@@ -5798,6 +5855,9 @@ async function handleEconomyCommand(message) {
   }
   if (withdrawAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => withdraw(message, commandParts));
+  }
+  if (creditsAliases.has(cmdName)) {
+    return completeEconomyCommand(message, () => showCredits(message));
   }
   if (helpAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showHelp(message));

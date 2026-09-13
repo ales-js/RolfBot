@@ -1,0 +1,24 @@
+{
+  "credits": [
+    {
+      "user": "<@1044985132777480253>",
+      "description": "created RolfBot."
+    },
+    {
+      "user": "<@1478369725632479365>",
+      "description": "tested Economy for bugs."
+    },
+    {
+      "user": "<@1155278929943330967>",
+      "description": "tested Economy for bugs."
+    },
+    {
+      "user": "<@1240075445114900512>",
+      "description": "tested Economy for bugs and suggested some economy responses."
+    },
+    {
+      "user": "OpenAI ChatGPT",
+      "description": "created most economy responses."
+    }
+  ]
+}
