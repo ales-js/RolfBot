@@ -9,3 +9,4 @@ economy_removed_users.jsonl
 xp.before-total-xp-*.json
 status.json
 *.zip
+activity.json
