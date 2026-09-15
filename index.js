@@ -14,6 +14,8 @@ const {
 
 const {
   handleEconomyCommand,
+  syncLevelRewards,
+  backfillLevelRewards,
   getUserEmbedColor
 } = require('./economy');
 const xpStore = require('./xp-store');
@@ -23,7 +25,8 @@ const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
 const lvlRoles = [
-  { level: 5, roleId: config.lvlRole1Id }
+  { level: 5, roleId: config.lvlRole1Id },
+  { level: 15, roleId: config.lvlRole2Id }
 ];
 
 xpStore.loadXp();
@@ -122,6 +125,11 @@ function startStatusRotation(readyClient) {
 
 client.once('ready', readyClient => {
   startStatusRotation(readyClient);
+  for (const guild of readyClient.guilds.cache.values()) {
+    backfillLevelRewards(guild).catch(error => {
+      console.error('[LEVEL REWARDS]: backfill failed:', error);
+    });
+  }
   const activityGuild = readyClient.guilds.cache.get(config.guildId);
   if (activityGuild) activityStore.scanMessages(activityGuild);
 
@@ -459,6 +467,7 @@ client.on('messageCreate', async message => {
     const userId = message.author.id;
     const baseXpAdd = Math.floor(Math.random() * 10) + 5;
     const result = xpStore.addXp(userId, baseXpAdd);
+    syncLevelRewards(message.guild.id, userId, message.member);
 
     if (message.guild.id === config.guildId && message.member) {
   for (const { level, roleId } of lvlRoles) {

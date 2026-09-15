@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomInt } = require('crypto');
 const xpStore = require('./xp-store');
+const levelRewards = require('./level-rewards');
 const activityStore = require('./activity-store');
 const {
   ActionRowBuilder,
@@ -456,7 +457,7 @@ const commandUsage = {
   achievements: '`?achievements`',
   stats: '`?stats`',
   cooldowns: '`?cooldowns`',
-  level: '`?level`',
+  level: '`?level [ rewards ]`',
   settings: '`?settings [ badges | color ]`',
   color: '`?color [ reset | #HEXHEX ]`',
   colorHex: '`?color #HEXHEX`',
@@ -521,7 +522,7 @@ const adminMessages = {
 const helpCommandEntries = [
   {
     usage: commandUsage.level,
-    description: 'View your level, total XP, and progress toward the next level.',
+    description: 'View your level and XP, or use ?level rewards to see all level rewards.',
     aliases: levelAliases
   },
   {
@@ -546,7 +547,7 @@ const helpCommandEntries = [
   },
   {
     usage: commandUsage.work,
-    description: 'Work to earn some money. pays 250-750',
+    description: 'Work to earn some money. pays 250-750 before level bonuses',
     aliases: workAliases
   },
   {
@@ -578,7 +579,7 @@ const helpCommandEntries = [
   },
   {
     usage: commandUsage.beg,
-    description: 'Beg strangers for a small but guaranteed amount of money. pays 25-150',
+    description: 'Beg strangers for a small but guaranteed amount of money. pays 25-150 before level bonuses',
     aliases: begAliases
   },
   {
@@ -941,7 +942,8 @@ function createShopComponents(
         [
           '## Shop',
           'Click a price button to instantly buy an item.',
-          'Use the category menu below to filter the shop.'
+          'Use the category menu below to filter the shop.',
+          `Your level discount: ${account.levelBonuses?.shop || 0}% (included in prices)`
         ].join('\n')
       )
     );
@@ -958,7 +960,7 @@ function createShopComponents(
     const owned = account.ownedItems.includes(item.id);
     const priceButton = new ButtonBuilder()
       .setCustomId(`economy_shop_buy:${item.id}`)
-      .setLabel(owned ? 'Owned' : formatMoney(item.price))
+      .setLabel(owned ? 'Owned' : formatMoney(levelRewards.price(account, item)))
       .setStyle(owned ? ButtonStyle.Secondary : ButtonStyle.Success)
       .setDisabled(disableAll || owned);
     if (!owned) {
@@ -1247,12 +1249,16 @@ const economyEmbeds = {
     const seconds = Math.floor(activity.voiceMs / 1000);
     const voiceTime = `${Math.floor(seconds / 3600).toLocaleString('en-US')}h ${Math.floor(seconds / 60) % 60}m ${seconds % 60}s`;
     const rank = getLevelLeaderboardEntries().findIndex(entry => entry.userId === message.author.id) + 1;
+    const nextReward = levelRewards.rewards.find(
+      reward => reward.level > progress.level
+    );
     return createEconomyEmbed(message, getUserEmbedColor(message.guild.id, message.author.id, message.member))
       .setDescription([
         `> Leaderboard Rank: **${rank || 'Unranked'}**`,
         `> XP: **${progress.progressXp.toLocaleString('en-US')} / ${progress.requiredXp.toLocaleString('en-US')}** (${progress.totalXp.toLocaleString('en-US')} total)`,
         `> Time spent in VC: **${voiceTime}**`,
-        `> Messages Sent: **${activity.messages.toLocaleString('en-US')}**${activityStore.getHistoryStatus(message.guild.id) !== 'complete' ? ' (history scan pending)' : ''}`
+        `> Messages Sent: **${activity.messages.toLocaleString('en-US')}**${activityStore.getHistoryStatus(message.guild.id) !== 'complete' ? ' (history scan pending)' : ''}`,
+        `> Next Reward: *${nextReward ? levelRewards.describe(nextReward, config) : 'All level rewards unlocked!'}*`
       ].join('\n'))
       .addFields(
         {
@@ -2637,6 +2643,7 @@ function getAccount(data, guildId, userId, member) {
   }
   activityAccounts.set(account, { guildId, userId });
   syncExtraStats(account, member);
+  levelRewards.apply(data, account, guildId, userId, xpStore.getUserProgress(userId).level);
   return account;
 }
 
@@ -3573,6 +3580,159 @@ async function showHelp(message) {
   }
 }
 
+const levelRewardButtonIds = {
+  first: 'level_rewards_first', previous: 'level_rewards_previous',
+  page: 'level_rewards_page', next: 'level_rewards_next', last: 'level_rewards_last'
+};
+
+function createLevelRewardButtons(page, total, disabled = false) {
+  return createPaginationButtons(levelRewardButtonIds, page, total, disabled);
+}
+
+function createLevelRewardsEmbed(message, account, page, total) {
+  const level = Math.max(xpStore.getUserProgress(message.author.id).level, account.levelRewardLevel || 1);
+  return createEconomyEmbed(message, account.settings.embedColor)
+    .setTitle('Level Rewards')
+    .setDescription(`Your level: **${xpStore.getUserProgress(message.author.id).level}**`)
+    .addFields(levelRewards.rewards.slice(page * 5, page * 5 + 5).map(reward => ({
+      name: `${level >= reward.level ? '🔓 Unlocked' : '🔒 Locked'} • Level ${reward.level}`,
+      value: levelRewards.describe(reward, config)
+    })))
+    .setFooter({ text: `Page ${page + 1}/${total}` });
+}
+
+function syncLevelRewards(guildId, userId, member) {
+  const data = loadEconomy();
+  const account = getAccount(data, guildId, userId, member);
+  saveEconomy(data);
+  return account;
+}
+
+async function backfillLevelRewards(guild) {
+  const members = await guild.members.fetch();
+  const data = loadEconomy();
+  let count = 0;
+  for (const member of members.values()) {
+    if (member.user.bot) continue;
+    getAccount(data, guild.id, member.id, member);
+    count++;
+  }
+  saveEconomy(data);
+  console.log(`[LEVEL REWARDS]: synced rewards for ${count} members`);
+  if (guild.id !== config.guildId) return;
+  for (const member of members.values()) {
+    if (member.user.bot) continue;
+    const level = xpStore.getUserProgress(member.id).level;
+    for (const reward of levelRewards.rewards.filter(reward => reward.roleConfig && reward.level <= level)) {
+      const roleId = config[reward.roleConfig];
+      if (!roleId || member.roles.cache.has(roleId)) continue;
+      await member.roles.add(roleId, `Level ${reward.level} reward`).catch(error => {
+        console.error(`[LEVEL REWARDS]: failed role ${roleId} for ${member.id}:`, error);
+      });
+    }
+  }
+}
+
+async function showLevelRewards(message) {
+  try {
+    const economyData = loadEconomy();
+    const account = getAccount(economyData, message.guild.id, message.author.id, message.member);
+    saveEconomy(economyData);
+    const totalPages = Math.max(
+      1,
+      Math.ceil(levelRewards.rewards.length / 5)
+    );
+    let currentPage = 0;
+    const embed = createLevelRewardsEmbed(message, account, currentPage, totalPages);
+    const components = totalPages > 1 ? [createLevelRewardButtons(currentPage, totalPages)] : [];
+    const helpMessage = await message.reply({
+      embeds: [embed],
+      components
+    });
+    if (totalPages <= 1) {
+      return helpMessage;
+    }
+    const collector = helpMessage.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      time: helpConfig.buttonTimeoutMinutes * 60 * 1000
+    });
+    collector.on('collect', async (interaction) => {
+      try {
+        if (interaction.user.id !== message.author.id) {
+          await interaction.reply({
+            content: economyMessages.helpWrongUser(message.author.id, message),
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: {
+              parse: []
+            }
+          });
+          return;
+        }
+        let pageInteraction = interaction;
+        if (interaction.customId === levelRewardButtonIds.first) {
+          currentPage = 0;
+        } else if (interaction.customId === levelRewardButtonIds.previous) {
+          currentPage = Math.max(0, currentPage - 1);
+        } else if (interaction.customId === levelRewardButtonIds.next) {
+          currentPage = Math.min(totalPages - 1, currentPage + 1);
+        } else if (interaction.customId === levelRewardButtonIds.last) {
+          currentPage = totalPages - 1;
+        } else if (interaction.customId === levelRewardButtonIds.page) {
+          collector.resetTimer();
+          const modalId = `economy_level_rewards_modal:${interaction.id}`;
+          const modalInteraction = await waitForPageModal(interaction, modalId, totalPages);
+          if (!modalInteraction) {
+            return;
+          }
+          const reqPage = getPageFromModal(modalInteraction, totalPages);
+          if (reqPage === null) {
+            await modalInteraction.reply({
+              content: 'Please enter a whole page number.',
+              flags: MessageFlags.Ephemeral
+            });
+            return;
+          }
+          currentPage = reqPage;
+          pageInteraction = modalInteraction;
+        } else {
+          return;
+        }
+        const updatedEmbed = createLevelRewardsEmbed(
+          message,
+          account,
+          currentPage,
+          totalPages
+        );
+        await pageInteraction.update({
+          embeds: [updatedEmbed],
+          components: [createLevelRewardButtons(currentPage, totalPages)]
+        });
+      } catch (error) {
+        console.error('[ECONOMY ERROR]: Failed to change level rewards page:', error);
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction
+            .reply({
+              content: formatError(error, message),
+              flags: MessageFlags.Ephemeral
+            })
+            .catch(() => {});
+        }
+      }
+    });
+    collector.on('end', async () => {
+      await helpMessage
+        .edit({
+          components: [createLevelRewardButtons(currentPage, totalPages, true)]
+        })
+        .catch(() => {});
+    });
+    return helpMessage;
+  } catch (error) {
+    console.error('[ECONOMY ERROR]: Failed to show level rewards:', error);
+    return message.reply(formatError(error, message));
+  }
+}
+
 function getLevelEmbed(guildId, user, member) {
   return economyEmbeds.level(
     { guild: { id: guildId }, author: user, member },
@@ -3582,6 +3742,7 @@ function getLevelEmbed(guildId, user, member) {
 
 async function showLevel(message, args = []) {
   try {
+    if (args.length === 1 && args[0].toLowerCase() === 'rewards') return showLevelRewards(message);
     const embed = args.length > 0
       ? economyEmbeds.levelInvalidUsage(message)
       : getLevelEmbed(message.guild.id, message.author, message.member);
@@ -3738,8 +3899,8 @@ async function showStats(message, args = []) {
         } else {
           return;
         }
-        const updatedEconomyData = loadEconomy();
-        const updatedAccount = getAccount(
+        let updatedEconomyData = loadEconomy();
+        let updatedAccount = getAccount(
           updatedEconomyData,
           message.guild.id,
           message.author.id,
@@ -3783,9 +3944,9 @@ async function showStats(message, args = []) {
 }
 
 function getLeaderboardBadges(account, achievements) {
-  const unlockedIds = new Set(Array.isArray(account?.achievements) ? account.achievements : []);
+  const unlockedIds = new Set([...(account?.achievements || []), ...(account?.levelBadges || [])]);
   const hiddenIds = new Set(Array.isArray(account?.settings?.hiddenBadgeIds) ? account.settings.hiddenBadgeIds : []);
-  return achievements
+  return [...achievements, levelRewards.badge]
     .filter((achievement) => unlockedIds.has(achievement.id) && achievement.badge && !hiddenIds.has(achievement.id))
     .map((achievement) => achievement.badge)
     .join('');
@@ -4133,8 +4294,8 @@ async function showAchievements(message, args = []) {
         } else {
           return;
         }
-        const updatedEconomyData = loadEconomy();
-        const updatedAccount = getAccount(
+        let updatedEconomyData = loadEconomy();
+        let updatedAccount = getAccount(
           updatedEconomyData,
           message.guild.id,
           message.author.id,
@@ -4203,9 +4364,8 @@ async function work(message) {
         embeds: [embed]
       });
     }
-    const earnedMoney =
-      Math.floor(Math.random() * (workConfig.maximumPay - workConfig.minimumPay + 1)) +
-      workConfig.minimumPay;
+    const earnedMoney = levelRewards.earnings(account, 'work',
+      randomWholeNumber(workConfig.minimumPay, workConfig.maximumPay));
     account.wallet += earnedMoney;
     account.lastWorkAt = now;
     incrementAchievementStatistic(account, 'work');
@@ -4509,7 +4669,7 @@ async function beg(message) {
         embeds: [embed]
       });
     }
-    const earnedMoney = randomWholeNumber(begConfig.minimumPay, begConfig.maximumPay);
+    const earnedMoney = levelRewards.earnings(account, 'beg', randomWholeNumber(begConfig.minimumPay, begConfig.maximumPay));
     account.wallet += earnedMoney;
     account.lastBegAt = now;
     incrementAchievementStatistic(account, 'beg');
@@ -5011,6 +5171,7 @@ async function showShop(message, args) {
           saveEconomy(categoryEconomyData);
           account.wallet = categoryAccount.wallet;
           account.ownedItems = [...categoryAccount.ownedItems];
+          account.levelBonuses = categoryAccount.levelBonuses;
           await interaction.update({
             components: createShopComponents(
               categoryAccount,
@@ -5059,6 +5220,7 @@ async function showShop(message, args) {
           saveEconomy(pageEconomyData);
           account.wallet = pageAccount.wallet;
           account.ownedItems = [...pageAccount.ownedItems];
+          account.levelBonuses = pageAccount.levelBonuses;
           await modalInteraction.update({
             components: createShopComponents(
               pageAccount,
@@ -5096,6 +5258,7 @@ async function showShop(message, args) {
           saveEconomy(pageEconomyData);
           account.wallet = pageAccount.wallet;
           account.ownedItems = [...pageAccount.ownedItems];
+          account.levelBonuses = pageAccount.levelBonuses;
           await interaction.update({
             components: createShopComponents(
               pageAccount,
@@ -5110,15 +5273,16 @@ async function showShop(message, args) {
           return;
         }
         const requestedItemId = interaction.customId.slice('economy_shop_buy:'.length);
-        const updatedEconomyData = loadEconomy();
-        const updatedAccount = getAccount(
+        let updatedEconomyData = loadEconomy();
+        let updatedAccount = getAccount(
           updatedEconomyData,
           message.guild.id,
           message.author.id,
           message.member
         );
         const updatedShopItems = loadShopItems();
-        const item = updatedShopItems.find((shopItem) => shopItem.id === requestedItemId);
+        const baseItem = updatedShopItems.find((shopItem) => shopItem.id === requestedItemId);
+        const item = baseItem && { ...baseItem, price: levelRewards.price(updatedAccount, baseItem) };
         if (!item) {
           await interaction.reply({
             content: 'That shop item is no longer available.',
@@ -5145,9 +5309,21 @@ async function showShop(message, args) {
           });
           return;
         }
-        await grantShopItemRole(message, item);
         updatedAccount.wallet -= item.price;
         updatedAccount.ownedItems.push(item.id);
+        saveEconomy(updatedEconomyData);
+        try {
+          await grantShopItemRole(message, item);
+        } catch (error) {
+          const refundData = loadEconomy();
+          const refundAccount = getAccount(refundData, message.guild.id, message.author.id, message.member);
+          refundAccount.wallet += item.price;
+          refundAccount.ownedItems = refundAccount.ownedItems.filter(id => id !== item.id);
+          saveEconomy(refundData);
+          throw error;
+        }
+        updatedEconomyData = loadEconomy();
+        updatedAccount = getAccount(updatedEconomyData, message.guild.id, message.author.id, message.member);
         mapStat(updatedAccount, 'shopItems', item.id, 'unique_shop_items');
         incrementAchievementStatistic(updatedAccount, `shop_item_${statId(item.id)}_purchases`);
         incrementAchievementStatistic(updatedAccount, `shop_category_${statId(item.category)}_purchases`);
@@ -5158,6 +5334,7 @@ async function showShop(message, args) {
         saveEconomy(updatedEconomyData);
         account.wallet = updatedAccount.wallet;
         account.ownedItems = [...updatedAccount.ownedItems];
+        account.levelBonuses = updatedAccount.levelBonuses;
         await interaction.update({
           components: createShopComponents(
             updatedAccount,
@@ -5209,10 +5386,10 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
   const container = new ContainerBuilder()
     .setAccentColor(Number.parseInt(account.settings.embedColor.slice(1), 16))
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-      '## Badge Settings\nChoose which earned badges appear before your name and mentions throughout the bot. you can get badges by completing difficult achievements. use `?achievements` and look for emojis in front of achievement names.'
+      '## Badge Settings\nChoose which earned badges appear before your name and mentions throughout the bot. you can get badges by completing difficult achievements or reaching level 25. use `?achievements` and look for emojis in front of achievement names.'
     ));
   for (const badge of badges.slice(page * 5, page * 5 + 5)) {
-    const owned = account.achievements.includes(badge.id);
+    const owned = [...account.achievements, ...(account.levelBadges || [])].includes(badge.id);
     const hidden = hiddenIds.has(badge.id);
     const secret = badge.hidden && !owned;
     container.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
@@ -5237,7 +5414,7 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
 }
 
 async function showBadgeSettings(message) {
-  const badges = loadAchievements().filter(achievement => achievement.badge);
+  const badges = [...loadAchievements().filter(achievement => achievement.badge), levelRewards.badge];
   const readAccount = () => {
     const data = loadEconomy();
     const account = getAccount(data, message.guild.id, message.author.id, message.member);
@@ -5265,7 +5442,7 @@ async function showBadgeSettings(message) {
       else if (interaction.customId === 'badge_next') page = Math.min(Math.max(0, Math.ceil(badges.length / 5) - 1), page + 1);
       else if (interaction.customId.startsWith('badge_toggle:')) {
         const id = interaction.customId.slice('badge_toggle:'.length);
-        if (account.achievements.includes(id) && loadAchievements().some(badge => badge.id === id && badge.badge)) {
+        if ([...account.achievements, ...(account.levelBadges || [])].includes(id) && badges.some(badge => badge.id === id && badge.badge)) {
           const hidden = new Set(account.settings.hiddenBadgeIds);
           if (hidden.has(id)) hidden.delete(id);
           else hidden.add(id);
@@ -6306,6 +6483,8 @@ registerRankStats();
 
 
 module.exports = {
+  syncLevelRewards,
+  backfillLevelRewards,
   handleEconomyCommand,
   getUserEmbedColor,
   getLevelEmbed,
