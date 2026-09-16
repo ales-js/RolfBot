@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const levelRewards = require('./level-rewards');
 const {
   ActivityType,
   Client,
@@ -26,6 +27,7 @@ const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
 const lvlRoles = [
   { level: 5, roleId: config.lvlRole1Id },
+  { level: 10, roleId: config.lvlRole3Id },
   { level: 15, roleId: config.lvlRole2Id }
 ];
 
@@ -236,6 +238,14 @@ async function checkLvlRole1(readyClient) {
       `${added} roles added, ${skipped} skips, ${failed} errors`
     );
   }
+}
+
+async function checkLvlRole2(readyClient) {
+  return checkLvlRole1(readyClient);
+}
+
+async function checkLvlRole3(readyClient) {
+  return checkLvlRole1(readyClient);
 }
 
 client.on('interactionCreate', async interaction => {
@@ -470,23 +480,23 @@ client.on('messageCreate', async message => {
     syncLevelRewards(message.guild.id, userId, message.member);
 
     if (message.guild.id === config.guildId && message.member) {
-  for (const { level, roleId } of lvlRoles) {
-    if (!roleId || result.level < level) continue;
-    if (message.member.roles.cache.has(roleId)) continue;
+      for (const { level, roleId } of lvlRoles) {
+        if (!roleId || result.level < level) continue;
+        if (message.member.roles.cache.has(roleId)) continue;
 
-    try {
-      await message.member.roles.add(
-        roleId,
-        `Reached level ${level}`
-      );
-    } catch (error) {
-      console.error(
-        `[LEVEL ROLE ERROR]: failed to give ${roleId} to ${userId}:`,
-        error
-      );
+        try {
+          await message.member.roles.add(
+            roleId,
+            `Reached level ${level}`
+          );
+        } catch (error) {
+          console.error(
+            `[LEVEL ROLE ERROR]: failed to give ${roleId} to ${userId}:`,
+            error
+          );
+        }
+      }
     }
-  }
-}
 
     if (result.leveledUp) {
       const embedColor = getUserEmbedColor(
@@ -495,13 +505,20 @@ client.on('messageCreate', async message => {
         message.member
       );
 
+      const reward = levelRewards.rewards.find(r => r.level === result.level);
+      const nextReward = levelRewards.rewards.find(r => r.level > result.level);
+
       const embed = new EmbedBuilder()
         .setColor(embedColor)
-        .setTitle('Levelup')
-        .setDescription(
-          `HURRA, ${message.author}! you are now level ` +
-          `**${result.level}**`
-        )
+        .setTitle('Leveled Up!')
+        .setDescription([
+          `HURRA, ${message.author}! you leveled up.`,
+          `> Level: **${result.level}**`,
+          `> XP: **${xpStore.getUserProgress(userId).totalXp.toLocaleString('en-US')}**`,
+          `> Reward Unlocked: **${reward ? levelRewards.describe(reward, config) : 'None'}**`,
+          `> Next Reward: **${nextReward ? `${levelRewards.describe(nextReward, config)} (level ${nextReward.level})` : 'All level rewards unlocked!'}**`,
+          '-# use `?level` to see XP bar and `?level rewards` to see all leveling rewards.'
+        ].join('\n'))
         .setTimestamp();
 
       await message.channel.send({ embeds: [embed] });
@@ -531,6 +548,14 @@ rl.on('line', input => {
     else activityStore.scanMessages(guild, true);
   } else if (cmd === 'check lvlrole1') {
     checkLvlRole1(client).catch(error => {
+      console.error('[LEVEL ROLES]: check failed:', error);
+    });
+  } else if (cmd === 'check lvlrole2') {
+    checkLvlRole2(client).catch(error => {
+      console.error('[LEVEL ROLES]: check failed:', error);
+    });
+  } else if (cmd === 'check lvlrole3') {
+    checkLvlRole3(client).catch(error => {
       console.error('[LEVEL ROLES]: check failed:', error);
     });
   } else if (cmd === 'exit') {

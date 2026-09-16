@@ -1258,7 +1258,7 @@ const economyEmbeds = {
         `> XP: **${progress.progressXp.toLocaleString('en-US')} / ${progress.requiredXp.toLocaleString('en-US')}** (${progress.totalXp.toLocaleString('en-US')} total)`,
         `> Time spent in VC: **${voiceTime}**`,
         `> Messages Sent: **${activity.messages.toLocaleString('en-US')}**${activityStore.getHistoryStatus(message.guild.id) !== 'complete' ? ' (history scan pending)' : ''}`,
-        `> Next Reward: *${nextReward ? levelRewards.describe(nextReward, config) : 'All level rewards unlocked!'}*`
+        `> Next Reward: **${nextReward ? `${levelRewards.describe(nextReward, config)} (level ${nextReward.level})` : 'All level rewards unlocked!'}**`
       ].join('\n'))
       .addFields(
         {
@@ -1282,17 +1282,31 @@ const economyEmbeds = {
       startIndex,
       startIndex + helpConfig.commandsPerPage
     );
-    const description = pageEntries
-      .map((entry) =>
-        [entry.usage, entry.description, `Aliases: ${formatAliases(entry.aliases)}`].join('\n')
+    const container = new ContainerBuilder()
+      .setAccentColor(Number.parseInt(account.settings.embedColor.slice(1), 16));
+
+    for (const [index, entry] of pageEntries.entries()) {
+      if (index > 0) {
+        container.addSeparatorComponents(
+          new SeparatorBuilder()
+            .setDivider(true)
+            .setSpacing(SeparatorSpacingSize.Small)
+        );
+      }
+      container.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          [entry.usage, entry.description, `Aliases: ${formatAliases(entry.aliases)}`]
+            .join('\n')
+        )
+      );
+    }
+
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `-# Page ${currentPage + 1}/${totalPages} • v${config.version}`
       )
-      .join('\n\n');
-    return createEconomyEmbed(message, account.settings.embedColor)
-      .setDescription(description)
-      .setFooter({
-        text: `Page ${currentPage + 1}/${totalPages} • v${config.version}`
-      })
-      .setTimestamp();
+    );
+    return container;
   },
 
   commandRepeatCooldown(message, cmdKey, remainingMilliseconds) {
@@ -3493,8 +3507,8 @@ async function showHelp(message) {
     const embed = economyEmbeds.help(message, account, currentPage, totalPages);
     const components = totalPages > 1 ? [createHelpButtons(currentPage, totalPages)] : [];
     const helpMessage = await message.reply({
-      embeds: [embed],
-      components
+      flags: MessageFlags.IsComponentsV2,
+      components: [embed, ...components]
     });
     if (totalPages <= 1) {
       return helpMessage;
@@ -3551,8 +3565,10 @@ async function showHelp(message) {
           totalPages
         );
         await pageInteraction.update({
-          embeds: [updatedEmbed],
-          components: [createHelpButtons(currentPage, totalPages)]
+          components: [
+            updatedEmbed,
+            createHelpButtons(currentPage, totalPages)
+          ]
         });
       } catch (error) {
         console.error('[ECONOMY ERROR]: Failed to change help page:', error);
@@ -3569,7 +3585,10 @@ async function showHelp(message) {
     collector.on('end', async () => {
       await helpMessage
         .edit({
-          components: [createHelpButtons(currentPage, totalPages, true)]
+          components: [
+            economyEmbeds.help(message, account, currentPage, totalPages),
+            createHelpButtons(currentPage, totalPages, true)
+          ]
         })
         .catch(() => {});
     });

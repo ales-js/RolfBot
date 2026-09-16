@@ -37,7 +37,8 @@ const rewards = [
   },
   {
     "level": 10,
-    "money": 2000
+    "money": 2000,
+    "roleConfig": "lvlRole3Id"
   },
   {
     "level": 11,
@@ -253,8 +254,11 @@ function describe(reward, config) {
   if (reward.shop) parts.push(`total shop discount: ${reward.shop}%`);
   if (reward.roleConfig) {
     const role = config[reward.roleConfig];
-    parts.push(role ? `<@&${role}>` : `level ${reward.level} role`);
-    if (reward.level === 5) parts.push('Ballsdex channel access');
+    let text = role ? `<@&${role}>` : `level ${reward.level} role`;
+    if (reward.level === 5) text += ' (Ballsdex channel access)';
+    if (reward.level === 10) text += ' (Moderator applications access)';
+    if (reward.level === 15) text += ' (create emojis, stickers and sounds permission)';
+    parts.push(text);
   }
   if (reward.badge) parts.push('🚀 Kosmosnaut badge');
   return parts.join(' + ');
