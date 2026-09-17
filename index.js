@@ -23,6 +23,7 @@ const {
 } = require('./economy');
 const xpStore = require('./xp-store');
 const activityStore = require('./activity-store');
+const voiceXp = require('./vc-xp');
 
 const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -129,6 +130,13 @@ function startStatusRotation(readyClient) {
 
 client.once('ready', readyClient => {
   startStatusRotation(readyClient);
+  if (!config.vcLevelUpChannelId) {
+    console.error('[VC XP]: set vcLevelUpChannelId in config.json for level-up messages.');
+  }
+  voiceXp.start(readyClient, {
+    guildId: config.guildId,
+    award: (member, xp) => awardXp(member.guild, member.user, member, xp, null, true)
+  });
   for (const guild of readyClient.guilds.cache.values()) {
     backfillLevelRewards(guild).catch(error => {
       console.error('[LEVEL REWARDS]: backfill failed:', error);
@@ -372,7 +380,7 @@ async function checkOldXp(readyClient) {
     }
     console.log(`[OLD XP]: finished! +${addedXp} XP from ${addedMessages} old messages. ${completed} channels completed, ${alreadyDone} already done, ${errors} access/discovery errors.`);
     if (errors) console.log('[OLD XP]: some history could not be read. fix access if needed, then run check oldxp again.');
-    console.log('[OLD XP]: use check lvlrole1 to update level roles. level rewards sync on the next message or restart.');
+    console.log('[OLD XP]: use check lvlrole1 to update level roles. level rewards sync on the next message, VC XP payout or restart.');
   } catch (error) {
     console.error('[OLD XP]: scan stopped; saved batches are kept. run check oldxp again to resume:', error);
   } finally {
@@ -589,6 +597,82 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
   }
 });
 
+const xpJobs = new Map();
+
+function awardXp(guild, user, member, amount, channel, fromVc = false) {
+  const previous = xpJobs.get(user.id) || Promise.resolve();
+  const job = previous.catch(() => {}).then(async () => {
+    const userId = user.id;
+    const result = xpStore.addXp(userId, amount);
+    try {
+      await syncLevelRewards(guild.id, userId, member);
+    } catch (error) {
+      console.error(`[LEVEL REWARDS]: failed for ${userId}:`, error);
+    }
+
+    if (guild.id === config.guildId && member) {
+      for (const { level, roleId } of lvlRoles) {
+        if (!roleId || result.level < level) continue;
+        if (member.roles.cache.has(roleId)) continue;
+
+        try {
+          await member.roles.add(
+            roleId,
+            `Reached level ${level}`
+          );
+        } catch (error) {
+          console.error(
+            `[LEVEL ROLE ERROR]: failed to give ${roleId} to ${userId}:`,
+            error
+          );
+        }
+      }
+    }
+
+    if (result.leveledUp) {
+      const embedColor = getUserEmbedColor(
+        guild.id,
+        userId,
+        member
+      );
+
+      const reward = levelRewards.rewards.find(r => r.level === result.level);
+      const nextReward = levelRewards.rewards.find(r => r.level > result.level);
+
+      const embed = new EmbedBuilder()
+        .setColor(embedColor)
+        .setTitle('Leveled Up!')
+        .setDescription([
+          `HURRA, ${user}! you leveled up.`,
+          `> Level: **${result.level}**`,
+          `> XP: **${xpStore.getUserProgress(userId).totalXp.toLocaleString('en-US')}**`,
+          `> Reward Unlocked: **${reward ? levelRewards.describe(reward, config) : 'None'}**`,
+          `> Next Reward: **${nextReward ? `${levelRewards.describe(nextReward, config)} (level ${nextReward.level})` : 'All level rewards unlocked!'}**`,
+          '-# use `?level` to see XP bar and `?level rewards` to see all leveling rewards.'
+        ].join('\n'))
+        .setTimestamp();
+
+      if (fromVc) {
+        channel = config.vcLevelUpChannelId
+          ? guild.channels.cache.get(config.vcLevelUpChannelId) ||
+            await guild.channels.fetch(config.vcLevelUpChannelId)
+          : null;
+      }
+      if (channel?.isTextBased() && typeof channel.send === 'function') {
+        await channel.send({ embeds: [embed] });
+      } else if (fromVc) {
+        console.error('[VC XP]: level-up earned, but vcLevelUpChannelId is missing or invalid.');
+      }
+    }
+  });
+  xpJobs.set(user.id, job);
+  const cleanup = () => {
+    if (xpJobs.get(user.id) === job) xpJobs.delete(user.id);
+  };
+  job.then(cleanup, cleanup);
+  return job;
+}
+
 // Leveling \\
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
@@ -606,55 +690,8 @@ client.on('messageCreate', async message => {
   }
 
   try {
-    const userId = message.author.id;
     const baseXpAdd = Math.floor(Math.random() * 10) + 5;
-    const result = xpStore.addXp(userId, baseXpAdd);
-    syncLevelRewards(message.guild.id, userId, message.member);
-
-    if (message.guild.id === config.guildId && message.member) {
-      for (const { level, roleId } of lvlRoles) {
-        if (!roleId || result.level < level) continue;
-        if (message.member.roles.cache.has(roleId)) continue;
-
-        try {
-          await message.member.roles.add(
-            roleId,
-            `Reached level ${level}`
-          );
-        } catch (error) {
-          console.error(
-            `[LEVEL ROLE ERROR]: failed to give ${roleId} to ${userId}:`,
-            error
-          );
-        }
-      }
-    }
-
-    if (result.leveledUp) {
-      const embedColor = getUserEmbedColor(
-        message.guild.id,
-        userId,
-        message.member
-      );
-
-      const reward = levelRewards.rewards.find(r => r.level === result.level);
-      const nextReward = levelRewards.rewards.find(r => r.level > result.level);
-
-      const embed = new EmbedBuilder()
-        .setColor(embedColor)
-        .setTitle('Leveled Up!')
-        .setDescription([
-          `HURRA, ${message.author}! you leveled up.`,
-          `> Level: **${result.level}**`,
-          `> XP: **${xpStore.getUserProgress(userId).totalXp.toLocaleString('en-US')}**`,
-          `> Reward Unlocked: **${reward ? levelRewards.describe(reward, config) : 'None'}**`,
-          `> Next Reward: **${nextReward ? `${levelRewards.describe(nextReward, config)} (level ${nextReward.level})` : 'All level rewards unlocked!'}**`,
-          '-# use `?level` to see XP bar and `?level rewards` to see all leveling rewards.'
-        ].join('\n'))
-        .setTimestamp();
-
-      await message.channel.send({ embeds: [embed] });
-    }
+    await awardXp(message.guild, message.author, message.member, baseXpAdd, message.channel);
   } catch (error) {
     console.error('[XP ERROR]: Failed to award message XP or send level-up:', error);
   }

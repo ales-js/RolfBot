@@ -3965,8 +3965,8 @@ async function showStats(message, args = []) {
 function getLeaderboardBadges(account, achievements) {
   const unlockedIds = new Set([...(account?.achievements || []), ...(account?.levelBadges || [])]);
   const hiddenIds = new Set(Array.isArray(account?.settings?.hiddenBadgeIds) ? account.settings.hiddenBadgeIds : []);
-  return [...achievements, levelRewards.badge]
-    .filter((achievement) => unlockedIds.has(achievement.id) && achievement.badge && !hiddenIds.has(achievement.id))
+  return [...achievements, ...levelRewards.badges]
+    .filter((achievement) => unlockedIds.has(achievement.id) && achievement.badge && (achievement.milestone ? levelRewards.selectedBadge(account) === achievement.id : !hiddenIds.has(achievement.id)))
     .map((achievement) => achievement.badge)
     .join('');
 }
@@ -5399,41 +5399,151 @@ async function showShop(message, args) {
   }
 }
 
+const badgePageSize = 4;
+
 function createBadgeSettingsComponents(account, badges, page, disableAll = false) {
-  const pages = Math.max(1, Math.ceil(badges.length / 5));
+  const text = {
+    title: '## Badge Settings',
+    description: [
+      'Choose which unlocked badges appear before your name throughout the bot. only one Leveling Milestone Badge can be equipped at once. your last unlocked one will be equipped.'
+    ].join('\n'),
+    types: {
+      achievement: '🏆 Achievement Badge',
+      milestone: '📈 Leveling Milestone Badge',
+      role: '🎭 Role Badge'
+    },
+    locked: '🔒 Locked',
+    shown: '🔓 Unlocked • Shown',
+    hidden: '🔓 Unlocked • Hidden',
+    equipped: '🔓 Unlocked • Equipped',
+    unequipped: '🔓 Unlocked • Not equipped',
+    show: 'Show Badge',
+    hide: 'Hide Badge',
+    equip: 'Equip Milestone',
+    unequip: 'Unequip Milestone'
+  };
+
+  const pages = Math.max(1, Math.ceil(badges.length / badgePageSize));
+  page = Math.max(0, Math.min(page, pages - 1));
+
   const hiddenIds = new Set(account.settings.hiddenBadgeIds || []);
+  const ownedIds = new Set([
+    ...(account.achievements || []),
+    ...(account.levelBadges || [])
+  ]);
+  const selected = levelRewards.selectedBadge(account);
+  const pageBadges = badges.slice(
+    page * badgePageSize,
+    (page + 1) * badgePageSize
+  );
+
   const container = new ContainerBuilder()
     .setAccentColor(Number.parseInt(account.settings.embedColor.slice(1), 16))
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-      '## Badge Settings\nChoose which earned badges appear before your name and mentions throughout the bot. you can get badges by completing difficult achievements or reaching level 25. use `?achievements` and look for emojis in front of achievement names.'
-    ));
-  for (const badge of badges.slice(page * 5, page * 5 + 5)) {
-    const owned = [...account.achievements, ...(account.levelBadges || [])].includes(badge.id);
-    const hidden = hiddenIds.has(badge.id);
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `${text.title}\n${text.description}`
+      )
+    );
+
+  for (const [index, badge] of pageBadges.entries()) {
+    const owned = ownedIds.has(badge.id);
+    const milestone = badge.milestone === true;
+    const shown = owned && (
+      milestone ? selected === badge.id : !hiddenIds.has(badge.id)
+    );
     const secret = badge.hidden && !owned;
-    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
-    container.addSectionComponents(new SectionBuilder()
-      .addTextDisplayComponents(new TextDisplayBuilder().setContent(secret
-        ? '### 🔒 Hidden Badge\nUnlock its achievement to discover it.'
-        : `### ${badge.badge} ${badge.name}\n${badge.description}\n-# ${!owned ? '🔒 Locked' : hidden ? 'Hidden everywhere' : 'Shown everywhere'}`))
-      .setButtonAccessory(new ButtonBuilder()
-        .setCustomId(`badge_toggle:${badge.id}`)
-        .setLabel(!owned ? 'Locked' : hidden ? 'Show' : 'Hide')
-        .setStyle(owned && hidden ? ButtonStyle.Success : ButtonStyle.Danger)
-        .setDisabled(disableAll || !owned)));
+    const type = milestone ? 'milestone' : badge.type || 'achievement';
+    const description = milestone
+      ? `Reach level ${badge.level}.`
+      : badge.description || 'err no desc';
+
+    const status = !owned
+      ? text.locked
+      : milestone
+        ? shown ? text.equipped : text.unequipped
+        : shown ? text.shown : text.hidden;
+
+    const content = secret
+      ? [
+          '### 🔒 **Hidden Badge**',
+          `> ${text.types[type] || text.types.achievement}`,
+          '> **Unlock its achievement to discover it.**',
+          `> -# **${text.locked}**`
+        ].join('\n')
+      : [
+          `### ${badge.badge} **${badge.name}**`,
+          `> **${description}**`,
+          `> -# **${status}**`,
+          `> -# **${text.types[type] || text.types.achievement}**`,
+        ].join('\n');
+
+    const label = !owned
+      ? text.locked
+      : milestone
+        ? shown ? text.unequip : text.equip
+        : shown ? text.hide : text.show;
+
+    if (index > 0) {
+      container.addSeparatorComponents(
+        new SeparatorBuilder()
+          .setDivider(true)
+          .setSpacing(SeparatorSpacingSize.Small)
+      );
+    }
+
+    container.addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(content)
+        )
+        .setButtonAccessory(
+          new ButtonBuilder()
+            .setCustomId(`badge_toggle:${badge.id}`)
+            .setLabel(label)
+            .setStyle(
+              shown || !owned
+                ? ButtonStyle.Secondary
+                : ButtonStyle.Primary
+            )
+            .setDisabled(disableAll || !owned)
+        )
+    );
   }
-  if (!badges.length) container.addTextDisplayComponents(new TextDisplayBuilder().setContent('No achievement badges are available yet.'));
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Page ${page + 1}/${pages}`));
+
+  if (!pageBadges.length) {
+    container.addTextDisplayComponents(
+      new TextDisplayBuilder().setContent('No badges are available yet.')
+    );
+  }
+
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(`-# Page ${page + 1}/${pages}`)
+  );
+
   const components = [container];
-  if (pages > 1) components.push(new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('badge_previous').setLabel('Previous').setStyle(ButtonStyle.Secondary).setDisabled(disableAll || page === 0),
-    new ButtonBuilder().setCustomId('badge_next').setLabel('Next').setStyle(ButtonStyle.Secondary).setDisabled(disableAll || page === pages - 1)
-  ));
+
+  if (pages > 1) {
+    components.push(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('badge_previous')
+          .setLabel('Previous')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(disableAll || page === 0),
+        new ButtonBuilder()
+          .setCustomId('badge_next')
+          .setLabel('Next')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(disableAll || page === pages - 1)
+      )
+    );
+  }
+
   return components;
 }
 
 async function showBadgeSettings(message) {
-  const badges = [...loadAchievements().filter(achievement => achievement.badge), levelRewards.badge];
+  const badges = [...loadAchievements().filter(achievement => achievement.badge), ...levelRewards.badges];
   const readAccount = () => {
     const data = loadEconomy();
     const account = getAccount(data, message.guild.id, message.author.id, message.member);
@@ -5462,10 +5572,12 @@ async function showBadgeSettings(message) {
       else if (interaction.customId.startsWith('badge_toggle:')) {
         const id = interaction.customId.slice('badge_toggle:'.length);
         if ([...account.achievements, ...(account.levelBadges || [])].includes(id) && badges.some(badge => badge.id === id && badge.badge)) {
-          const hidden = new Set(account.settings.hiddenBadgeIds);
-          if (hidden.has(id)) hidden.delete(id);
-          else hidden.add(id);
-          account.settings.hiddenBadgeIds = [...hidden];
+          if (!levelRewards.toggleBadge(account, id)) {
+            const hidden = new Set(account.settings.hiddenBadgeIds);
+            if (hidden.has(id)) hidden.delete(id);
+            else hidden.add(id);
+            account.settings.hiddenBadgeIds = [...hidden];
+          }
           incrementAchievementStatistic(account, 'badge_changes');
           saveEconomy(data);
         }
