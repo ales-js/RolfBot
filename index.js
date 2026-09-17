@@ -4,6 +4,8 @@ const readline = require('readline');
 const levelRewards = require('./level-rewards');
 const {
   ActivityType,
+  ChannelType,
+  PermissionFlagsBits,
   Client,
   Collection,
   EmbedBuilder,
@@ -246,6 +248,136 @@ async function checkLvlRole2(readyClient) {
 
 async function checkLvlRole3(readyClient) {
   return checkLvlRole1(readyClient);
+}
+
+let checkingOldXp = false;
+
+async function checkOldXp(readyClient) {
+  if (!readyClient.isReady()) {
+    console.log('[OLD XP]: bot is not ready yet.');
+    return;
+  }
+  if (checkingOldXp) {
+    console.log('[OLD XP]: scan already running.');
+    return;
+  }
+  checkingOldXp = true;
+  let errors = 0;
+  let addedMessages = 0;
+  let addedXp = 0;
+  let completed = 0;
+  let alreadyDone = 0;
+
+  try {
+    const guild = await readyClient.guilds.fetch(config.guildId);
+    const me = await guild.members.fetchMe({ force: true });
+    const scan = xpStore.beginOldXp(guild.id, readyClient.user.id, me.joinedTimestamp);
+    const first = ((BigInt(scan.cutoff) - 1420070400000n) << 22n).toString();
+    console.log(`[OLD XP]: scanning ${guild.name}, before ${new Date(scan.cutoff).toISOString()}`);
+    if (scan.cutoff !== me.joinedTimestamp) {
+      console.log('[OLD XP]: keeping the saved cutoff from the earlier scan.');
+    }
+    const targets = new Map();
+    const channels = await guild.channels.fetch();
+    const add = channel => {
+      if (channel?.messages?.fetch) targets.set(channel.id, channel);
+    };
+    for (const channel of channels.values()) add(channel);
+    try {
+      const active = await guild.channels.fetchActiveThreads();
+      for (const thread of active.threads.values()) add(thread);
+    } catch (error) {
+      errors++;
+      console.error(`[OLD XP]: active thread discovery failed: ${error.message}`);
+    }
+
+    for (const channel of channels.values()) {
+      if (!channel?.threads?.fetchArchived) continue;
+      const permissions = channel.permissionsFor(me);
+      if (!permissions?.has(PermissionFlagsBits.ViewChannel) ||
+          !permissions.has(PermissionFlagsBits.ReadMessageHistory)) {
+        errors++;
+        console.log(`[OLD XP]: cannot read archived threads in #${channel.name}`);
+        continue;
+      }
+      const kinds = [{ type: 'public' }];
+      if (channel.type === ChannelType.GuildText) {
+        kinds.push({ type: 'private', fetchAll: permissions.has(PermissionFlagsBits.ManageThreads) });
+      }
+      for (const kind of kinds) {
+        let before;
+        let pages = 0;
+        try {
+          while (true) {
+            const page = await channel.threads.fetchArchived({ ...kind, limit: 100, ...(before ? { before } : {}) });
+            for (const thread of page.threads.values()) add(thread);
+            pages++;
+            console.log(`[OLD XP]: #${channel.name}: ${kind.type} archived threads, page ${pages}`);
+            if (!page.hasMore) break;
+            if (!page.threads.size) throw new Error('empty thread page with more results');
+            let next;
+            if (kind.type === 'private' && !kind.fetchAll) {
+              next = [...page.threads.keys()].reduce((a, b) => BigInt(a) < BigInt(b) ? a : b);
+              if (before && BigInt(next) >= BigInt(before)) throw new Error('thread cursor did not advance');
+            } else {
+              const timestamps = [...page.threads.values()].map(thread => thread.archiveTimestamp);
+              if (timestamps.some(time => !Number.isSafeInteger(time))) throw new Error('missing thread archive time');
+              next = new Date(Math.min(...timestamps));
+              if (before && next.getTime() >= before.getTime()) throw new Error('thread cursor did not advance');
+            }
+            before = next;
+          }
+        } catch (error) {
+          errors++;
+          console.error(`[OLD XP]: #${channel.name}: ${kind.type} thread discovery failed: ${error.message}`);
+        }
+      }
+    }
+
+    console.log(`[OLD XP]: found ${targets.size} channels and threads.`);
+    let index = 0;
+    for (const channel of targets.values()) {
+      index++;
+      let state = scan.channels[channel.id];
+      const label = `[${index}/${targets.size}] #${channel.name}`;
+      if (state?.done) {
+        alreadyDone++;
+        console.log(`[OLD XP]: ${label}: already done`);
+        continue;
+      }
+      const permissions = channel.permissionsFor(me);
+      if (!permissions?.has(PermissionFlagsBits.ViewChannel) ||
+          !permissions.has(PermissionFlagsBits.ReadMessageHistory)) {
+        errors++;
+        console.log(`[OLD XP]: ${label}: missing view channel or read message history`);
+        continue;
+      }
+      console.log(`[OLD XP]: ${label}: scanning...`);
+      while (!state?.done) {
+        const before = state?.before || first;
+        let batch;
+        try {
+          batch = await channel.messages.fetch({ limit: 100, before, cache: false });
+        } catch (error) {
+          errors++;
+          console.error(`[OLD XP]: ${label}: ${error.message}. progress saved, rerun to retry.`);
+          break;
+        }
+        state = xpStore.applyOldXpBatch(guild.id, channel.id, before, [...batch.values()]);
+        addedMessages += state.addedMessages;
+        addedXp += state.addedXp;
+        console.log(`[OLD XP]: ${label}: ${state.messages} messages, ${state.xp} XP${state.done ? ' (done)' : ''}`);
+      }
+      if (state?.done) completed++;
+    }
+    console.log(`[OLD XP]: finished! +${addedXp} XP from ${addedMessages} old messages. ${completed} channels completed, ${alreadyDone} already done, ${errors} access/discovery errors.`);
+    if (errors) console.log('[OLD XP]: some history could not be read. fix access if needed, then run check oldxp again.');
+    console.log('[OLD XP]: use check lvlrole1 to update level roles. level rewards sync on the next message or restart.');
+  } catch (error) {
+    console.error('[OLD XP]: scan stopped; saved batches are kept. run check oldxp again to resume:', error);
+  } finally {
+    checkingOldXp = false;
+  }
 }
 
 client.on('interactionCreate', async interaction => {
@@ -542,6 +674,8 @@ rl.on('line', input => {
   if (cmd === 're') {
     console.log('[CONSOLE INFO]: restarting...');
     process.exit(0);
+  } else if (cmd === 'check oldxp') {
+    checkOldXp(client).catch(error => console.error('[OLD XP]:', error));
   } else if (cmd === 'check messages') {
     const guild = client.guilds.cache.get(config.guildId);
     if (!client.isReady() || !guild) console.log('[MESSAGES]: bot is not ready yet.');

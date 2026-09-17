@@ -47,10 +47,20 @@ function validateUsers(users, legacy = false) {
   }
 }
 
-function saveXp(users) {
+function saveXp(users, oldMessageXp) {
   validateUsers(users);
+  let stored = {};
+  if (fs.existsSync(xpFile)) {
+    const current = JSON.parse(fs.readFileSync(xpFile, 'utf8'));
+    if (current?.format === xpFormat) stored = current;
+    else if (current && Object.prototype.hasOwnProperty.call(current, 'format')) {
+      throw new Error('unrecognized xp.json format. no change saved');
+    }
+  }
+  const next = { ...stored, format: xpFormat, users };
+  if (oldMessageXp !== undefined) next.oldMessageXp = oldMessageXp;
   const temporaryFile = `${xpFile}.tmp`;
-  fs.writeFileSync(temporaryFile, JSON.stringify({ format: xpFormat, users }, null, 2));
+  fs.writeFileSync(temporaryFile, JSON.stringify(next, null, 2));
   fs.renameSync(temporaryFile, xpFile);
 }
 
@@ -145,7 +155,88 @@ function resetLevel(userId) {
   saveXp(users);
 }
 
+function readOldXp() {
+  const stored = JSON.parse(fs.readFileSync(xpFile, 'utf8'));
+  const scans = stored.oldMessageXp ?? {};
+  if (!scans || typeof scans !== 'object' || Array.isArray(scans)) {
+    throw new Error('invalid old message xp history. no xp changed');
+  }
+  return scans;
+}
+
+function beginOldXp(guildId, botId, joinedAt) {
+  if (!/^\d{17,20}$/.test(guildId) || !/^\d{17,20}$/.test(botId)) {
+    throw new Error('invalid server or bot id');
+  }
+  requireWholeNumber(joinedAt, 1420070400001, 'Bot join time');
+  const users = loadXp();
+  const scans = readOldXp();
+  if (scans[guildId]) {
+    const scan = scans[guildId];
+    if (scan.botId !== botId || scan.version !== 1 || !scan.channels ||
+        typeof scan.channels !== 'object' || Array.isArray(scan.channels)) {
+      throw new Error('old xp history does not match this bot');
+    }
+    requireWholeNumber(scan.cutoff, 1420070400001, 'Saved bot join time');
+    if (scan.cutoff > joinedAt) throw new Error('saved old xp cutoff is later than the bot join time');
+    return scan;
+  }
+  const backup = path.join(__dirname, `xp.before-oldxp-${Date.now()}-${randomUUID()}.json`);
+  fs.copyFileSync(xpFile, backup, fs.constants.COPYFILE_EXCL);
+  scans[guildId] = { version: 1, botId, cutoff: joinedAt, channels: {} };
+  saveXp(users, scans);
+  console.log(`[OLD XP]: backup saved: ${path.basename(backup)}`);
+  return scans[guildId];
+}
+
+function applyOldXpBatch(guildId, channelId, before, messages) {
+  const users = loadXp();
+  const scans = readOldXp();
+  const scan = scans[guildId];
+    if (!/^\d{17,20}$/.test(channelId)) {
+      throw new Error(`invalid old xp channel id: ${String(channelId)}`);
+    }
+    if (!scan) {
+      throw new Error(
+        `missing old xp state for guild ${guildId}; ` +
+        `saved guilds: ${Object.keys(scans).join(', ') || 'none'}; ` +
+        `file: ${xpFile}`
+      );
+    }
+  const first = ((BigInt(scan.cutoff) - 1420070400000n) << 22n).toString();
+  const previous = scan.channels[channelId];
+  if (previous?.done || (previous?.before || first) !== before) {
+    throw new Error('old xp checkpoint changed. run check oldxp again');
+  }
+  const seen = new Set();
+  let next = before;
+  let count = 0;
+  let amount = 0;
+  for (const message of messages) {
+    if (!/^\d{17,20}$/.test(message.id) || BigInt(message.id) >= BigInt(before)) {
+      throw new Error('unexpected message in old xp batch');
+    }
+    if (seen.has(message.id)) continue;
+    seen.add(message.id);
+    if (BigInt(message.id) < BigInt(next)) next = message.id;
+    if (message.createdTimestamp >= scan.cutoff || !message.author || message.author.bot) continue;
+    const xp = Math.floor(Math.random() * 10) + 5;
+    addXpToData(users, message.author.id, xp);
+    count++;
+    amount += xp;
+  }
+  scan.channels[channelId] = {
+    before: next,
+    done: messages.length === 0,
+    messages: (previous?.messages || 0) + count,
+    xp: (previous?.xp || 0) + amount
+  };
+  saveXp(users, scans);
+  return { ...scan.channels[channelId], addedMessages: count, addedXp: amount };
+}
+
 module.exports = {
   loadXp, saveXp, xpAtLevel, levelFromXp, getProgress, getUserProgress,
-  addXpToData, addXp, setTotalXp, setLevel, resetLevel
+  addXpToData, addXp, setTotalXp, setLevel, resetLevel,
+  beginOldXp, applyOldXpBatch
 };

@@ -10,3 +10,5 @@ xp.before-total-xp-*.json
 status.json
 *.zip
 activity.json
+
+xp.before-oldxp-*.json
