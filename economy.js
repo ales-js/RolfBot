@@ -1259,7 +1259,7 @@ function createAchievementComponents(
 
 const economyEmbeds = {
   level(message, progress) {
-    const filled = Math.max(0, Math.min(12, Math.round(progress.progressXp / progress.requiredXp * 12)));
+    const filled = Math.max(0, Math.min(18, Math.round(progress.progressXp / progress.requiredXp * 18)));
     const bar = '[' + '▰'.repeat(filled) + '▱'.repeat(18 - filled) + ']';
     const percentage = (progress.progressXp / progress.requiredXp * 100).toFixed(1);
     const activity = activityStore.getStats(message.guild.id, message.author.id);
@@ -1896,9 +1896,9 @@ const economyEmbeds = {
 
   slotResult(message, account, won, outcome, amount, payout, topReels, reels, bottomReels) {
     const slotDisplay = [
-      topReels.join(' **│** '),
-      reels.join(' **│** '),
-      bottomReels.join(' **│** ')
+      '' + topReels.join(' **│** '),
+      '' + reels.join(' **│** '),
+      '' + bottomReels.join(' **│** ')
     ].join('\n');
     const resultText = won
       ? [
