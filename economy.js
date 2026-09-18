@@ -1260,7 +1260,7 @@ function createAchievementComponents(
 const economyEmbeds = {
   level(message, progress) {
     const filled = Math.max(0, Math.min(12, Math.round(progress.progressXp / progress.requiredXp * 12)));
-    const bar = '[' + '▰'.repeat(filled) + '▱'.repeat(12 - filled) + ']';
+    const bar = '[' + '▰'.repeat(filled) + '▱'.repeat(18 - filled) + ']';
     const percentage = (progress.progressXp / progress.requiredXp * 100).toFixed(1);
     const activity = activityStore.getStats(message.guild.id, message.author.id);
     const seconds = Math.floor(activity.voiceMs / 1000);
