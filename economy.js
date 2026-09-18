@@ -107,7 +107,7 @@ const shopConfig = {
 };
 
 const achConfig = {
-  achievementsPerPage: 7,
+  achievementsPerPage: 4,
   buttonTimeoutMinutes: 2
 };
 
