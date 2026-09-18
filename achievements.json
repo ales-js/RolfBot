@@ -162,6 +162,25 @@
         "xp": 777
       },
       "enabled": true
-  }
+    },
+    {
+      "id": "true_capitalist",
+      "name": "True Capitalist",
+      "description": "reach one million",
+      "difficulty": "Extremely Difficult",
+      "badge": "💸",
+      "show_progress": true,
+      "image_url": "",
+      "hidden": false,
+      "condition": {
+        "type": "total_money",
+        "target": 1000000
+      },
+      "rewards": {
+        "money": 100000,
+        "xp": 10000
+      },
+      "enabled": true
+  }   
   ]
 }
