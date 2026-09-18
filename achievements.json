@@ -178,7 +178,7 @@
       },
       "rewards": {
         "money": 100000,
-        "xp": 10000
+        "xp": 25000
       },
       "enabled": true
     },
@@ -197,7 +197,7 @@
         "target": 36000
       },
       "rewards": {
-        "xp": 1500
+        "xp": 3500
       },
       "enabled": true
     }
