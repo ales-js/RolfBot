@@ -196,13 +196,30 @@ const statisticNames = [
 
 const robImmunityItemId = 'robbing_immunity';
 const robImmunityRoleId = '1536497693550190602';
+
 const staatsfeindItemId = 'staatsfeind';
 const staatsfeindRoleId = '1545443722613756004';
-const income1000ItemId = 'income_1000';
-const income1000RoleId = '1533228759262560256';
 const staatsfeindSuccessChanceBoost = 25;
 
+const income1000ItemId = 'income_1000';
+const income1000RoleId = '1533228759262560256';
+
+const slotsLuckItemId = 'gluecksgenosse';
+const slotsLuckRoleId = '1550504236968583218';
+const slotsLuckBoost = {
+  Bronze: 10,
+  Silver: 5,
+  Gold: 3,
+  Platinum: 1.5
+};
+
+const rouletteLuckItemId = 'rouletterolf';
+const rouletteLuckRoleId = '1550504137458712606';
+const rouletteRefundChance = 20;
+
 const shopRoleIds = new Map([
+  [slotsLuckItemId, slotsLuckRoleId],
+  [rouletteLuckItemId, rouletteLuckRoleId],
   [robImmunityItemId, robImmunityRoleId],
   [staatsfeindItemId, staatsfeindRoleId],
   [income1000ItemId, income1000RoleId],
@@ -585,7 +602,7 @@ const helpCommandEntries = [
   {
     usage: commandUsage.slots,
     description:
-      'Gamble your wallet balance away. ' +
+      'Gamble your wallet balance away. the Glücksgenosse role increases your luck by almost 20%. see more details about how it affects your odds in https://discord.com/channels/1531931159326625802/1543365449981628616 ' +
       '(<:RolfBot_berliner_bronze:1546195312920760410> = x1.25, ' +
       '<:RolfBot_berliner_silver:1546194641089724557> = x1.5, ' +
       '<:RolfBot_berliner_gold:1546194660983181352> = x2.0, ' +
@@ -595,7 +612,7 @@ const helpCommandEntries = [
   {
     usage: commandUsage.roulette,
     description:
-    'Join the current roulette game or start a new one.',
+    `Join the current roulette game or start a new one. the Roulette-Rolf role gives a ${rouletteRefundChance}% chance to refund your net losses.`,
     aliases: rouletteAliases
   },
   {
@@ -2005,6 +2022,8 @@ const economyEmbeds = {
           '',
           'six line - 6 numbers that touch each other on the roulette table horizontally = 6x multiplier',
           'six line example: `?roulette [ amount ] 13-14-15-16-17-18`',
+          '',
+          `Roulette-Rolf Role: ${rouletteRefundChance}% chance to refund your net losses.`,
         ].join('\n')
       );
   },
@@ -3075,11 +3094,11 @@ function normalizeHexColor(input) {
   return null;
 }
 
-function getSlotOutcome() {
+function getSlotOutcome(lucky = false) {
   const roll = Math.random() * 100;
   let totalChance = 0;
   for (const outcome of slotConfig.outcomes) {
-    totalChance += outcome.chance;
+    totalChance += outcome.chance + (lucky ? (slotsLuckBoost[outcome.name] || 0) : 0);
     if (roll < totalChance) {
       return outcome;
     }
@@ -3253,12 +3272,14 @@ function rouletteBetWins(bet, number) {
 function formatRouletteSummaries(summaries, resultWord, guildId) {
   const maximumDisplayedUsers = 15;
   const lines = summaries.slice(0, maximumDisplayedUsers).map((summary) => {
+    const refundText = summary.refund > 0
+      ? ` (Roulette-Rolf Role refunded ${currencyEmoji}**${formatMoney(summary.refund)}**)` : '';
     if (summary.net === 0) {
-      return `<@${summary.userId}> ${resultWord}`;
+      return `<@${summary.userId}> ${resultWord}${refundText}`;
     }
     return (
       `<@${summary.userId}> ${resultWord} ` +
-      `${currencyEmoji}**${formatMoney(Math.abs(summary.net))}**`
+      `${currencyEmoji}**${formatMoney(Math.abs(summary.net))}**${refundText}`
     );
   });
   if (summaries.length > maximumDisplayedUsers) {
@@ -3305,17 +3326,27 @@ function createRouletteSummaries(game, number, economyData) {
       payout: 0,
       net: 0,
       bets: 0,
-      wins: 0
+      wins: 0,
+      luckyNet: 0,
+      refund: 0
     };
     summary.bets += 1;
     summary.wins += betWon ? 1 : 0;
     summary.amountBet += bet.amount;
     summary.payout += payout;
     summary.net += payout - bet.amount;
+    if (bet.lucky) summary.luckyNet += payout - bet.amount;
     summariesByUser.set(bet.userId, summary);
   }
   for (const summary of summariesByUser.values()) {
     const account = accounts.get(summary.userId);
+    if (summary.net < 0 && summary.luckyNet < 0 && randomInt(0, 100) < rouletteRefundChance) {
+      summary.refund = Math.min(-summary.net, -summary.luckyNet);
+      account.wallet += summary.refund;
+      summary.payout += summary.refund;
+      summary.net += summary.refund;
+      incrementAchievementStatistic(account, 'roulette_payouts', summary.refund);
+    }
     setMaximumAchievementStatistic(account, 'most_roulette_bets_round', summary.bets);
     setMaximumAchievementStatistic(account, 'most_roulette_wins_round', summary.wins);
     setMaximumAchievementStatistic(account, 'most_roulette_wagered_round', summary.amountBet);
@@ -5002,7 +5033,7 @@ async function slot(message, args) {
         embeds: [embed]
       });
     }
-    const outcome = getSlotOutcome();
+    const outcome = getSlotOutcome(message.member?.roles?.cache?.has(slotsLuckRoleId));
     const won = outcome !== null;
     const payout = won ? Math.floor(amount * outcome.multiplier) : 0;
     const reels = won ? [outcome.emoji, outcome.emoji, outcome.emoji] : getLosingSlotReels();
@@ -5096,6 +5127,7 @@ async function roulette(message, args) {
     const bet = {
       ...rouletteSpace,
       userId: message.author.id,
+      lucky: Boolean(message.member?.roles?.cache?.has(rouletteLuckRoleId)),
       amount
     };
     account.wallet -= amount;
