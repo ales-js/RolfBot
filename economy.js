@@ -901,10 +901,24 @@ function getShopCategories(shopItems) {
   return [...new Set(shopItems.map((item) => item.category))];
 }
 
+const customRoleOptions = new Map([
+  ['custom_role_10k', 'Name + Color'],
+  ['custom_role_25k', 'Name + Gradient'],
+  ['custom_role_50k', 'Name + Gradient + Icon']
+]);
+
 function getShopItemsForCategory(shopItems, selectedCat) {
-  return selectedCat === 'all'
+  const items = selectedCat === 'all'
     ? shopItems
-    : shopItems.filter((item) => item.category === selectedCat);
+    : shopItems.filter(item => item.category === selectedCat);
+  const variants = items.filter(item => customRoleOptions.has(item.id));
+  let added = false;
+  return items.flatMap(item => {
+    if (!customRoleOptions.has(item.id)) return [item];
+    if (added) return [];
+    added = true;
+    return [{ ...item, variants }];
+  });
 }
 
 function getShopPageCount(shopItems, selectedCat) {
@@ -942,7 +956,8 @@ function createShopComponents(
   shopItems,
   selectedCat = 'all',
   page = 0,
-  disableAll = false
+  disableAll = false,
+  selectedCustomRole = 'custom_role_10k'
 ) {
   const visibleItems = getShopItemsForCategory(shopItems, selectedCat);
   const totalPages = getShopPageCount(shopItems, selectedCat);
@@ -973,7 +988,10 @@ function createShopComponents(
         new TextDisplayBuilder().setContent('There are currently no items in this category.')
       );
   }
-  for (const [itemIndex, item] of pageItems.entries()) {
+  for (const [itemIndex, entry] of pageItems.entries()) {
+    const item = entry.variants
+      ? entry.variants.find(option => option.id === selectedCustomRole) || entry.variants[0]
+      : entry;
     const owned = account.ownedItems.includes(item.id);
     const priceButton = new ButtonBuilder()
       .setCustomId(`economy_shop_buy:${item.id}`)
@@ -987,7 +1005,7 @@ function createShopComponents(
       });
     }
     const itemText = [
-      `${item.emoji ? `${item.emoji} ` : ''}**${item.name}**`,
+      `${item.emoji ? `${item.emoji} ` : ''}**${entry.variants ? 'Custom Role' : item.name}**`,
       item.description || 'No description provided.'
     ].join('\n');
     if (itemIndex > 0) {
@@ -1000,6 +1018,23 @@ function createShopComponents(
           .addTextDisplayComponents(new TextDisplayBuilder().setContent(itemText))
           .setButtonAccessory(priceButton)
       );
+    if (entry.variants) {
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('economy_shop_custom_role')
+        .setPlaceholder('Choose a custom role')
+        .setDisabled(disableAll)
+        .addOptions(entry.variants.map(option => {
+          const ownedOption = account.ownedItems.includes(option.id);
+          const choice = new StringSelectMenuOptionBuilder()
+            .setLabel(customRoleOptions.get(option.id))
+            .setValue(option.id)
+            .setDescription(`${formatMoney(levelRewards.price(account, option))} Ostmark${ownedOption ? ' • Owned' : ''}`)
+            .setDefault(option.id === item.id);
+          if (option.emoji) choice.setEmoji(option.emoji);
+          return choice;
+        }));
+      container.addActionRowComponents(new ActionRowBuilder().addComponents(menu));
+    }
   }
   const components = [
     container,
@@ -3995,10 +4030,46 @@ async function showStats(message, args = []) {
   }
 }
 
+function getCustomBadges(account) {
+  if (!account?.ownedItems?.includes('custom_badge') || !account.customBadgeEmoji) return [];
+  return [{
+    id: 'custom_badge',
+    name: 'Custom Badge',
+    badge: account.customBadgeEmoji,
+    type: 'custom',
+    description: 'Your custom badge from `?shop`. Delete it to buy a different emoji. (doesn\'t refund the money)'
+  }];
+}
+
+function isCustomBadgeEmoji(value) {
+  const part = String.raw`\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?`;
+  const pattern = new RegExp(`^(?:${part}(?:\\u200D${part})*|\\p{Regional_Indicator}{2}|[#*0-9]\\uFE0F?\\u20E3|\\u{1F3F4}[\\u{E0061}-\\u{E007A}]+\\u{E007F})$`, 'u');
+  return typeof value === 'string' && pattern.test(value);
+}
+
+async function waitForCustomBadgeModal(interaction) {
+  const modalId = `custom_badge_modal:${interaction.id}`;
+  const input = new TextInputBuilder()
+    .setCustomId('badge_emoji')
+    .setLabel('Emoji')
+    .setPlaceholder('choose one standard emoji.')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMaxLength(100);
+  await interaction.showModal(new ModalBuilder()
+    .setCustomId(modalId)
+    .setTitle('Custom Badge')
+    .addComponents(new ActionRowBuilder().addComponents(input)));
+  return interaction.awaitModalSubmit({
+    filter: submitted => submitted.customId === modalId && submitted.user.id === interaction.user.id,
+    time: 60000
+  }).catch(() => null);
+}
+
 function getLeaderboardBadges(account, achievements) {
-  const unlockedIds = new Set([...(account?.achievements || []), ...(account?.levelBadges || [])]);
+  const unlockedIds = new Set([...(account?.achievements || []), ...(account?.levelBadges || []), ...getCustomBadges(account).map(badge => badge.id)]);
   const hiddenIds = new Set(Array.isArray(account?.settings?.hiddenBadgeIds) ? account.settings.hiddenBadgeIds : []);
-  return [...achievements, ...levelRewards.badges]
+  return [...achievements, ...levelRewards.badges, ...getCustomBadges(account)]
     .filter((achievement) => unlockedIds.has(achievement.id) && achievement.badge && (achievement.milestone ? levelRewards.selectedBadge(account) === achievement.id : !hiddenIds.has(achievement.id)))
     .map((achievement) => achievement.badge)
     .join('');
@@ -5185,8 +5256,11 @@ async function showShop(message, args) {
     const shopItems = loadShopItems();
     let selectedCat = 'all';
     let selectedPage = 0;
+    let selectedCustomRole = 'custom_role_10k';
+    const renderShop = (currentAccount, items, category, page, disabled = false) =>
+      createShopComponents(currentAccount, items, category, page, disabled, selectedCustomRole);
     saveEconomy(economyData);
-    const components = createShopComponents(account, shopItems, selectedCat, selectedPage);
+    const components = renderShop(account, shopItems, selectedCat, selectedPage);
     const shopMessage = await message.reply({
       components,
       flags: MessageFlags.IsComponentsV2
@@ -5204,6 +5278,20 @@ async function showShop(message, args) {
               parse: []
             }
           });
+          return;
+        }
+        if (interaction.customId === 'economy_shop_custom_role') {
+          const selectedId = interaction.values[0];
+          const items = loadShopItems();
+          if (!customRoleOptions.has(selectedId) || !items.some(item => item.id === selectedId)) {
+            await interaction.reply({ content: 'That custom role option is no longer available.', flags: MessageFlags.Ephemeral });
+            return;
+          }
+          selectedCustomRole = selectedId;
+          const data = loadEconomy();
+          const currentAccount = getAccount(data, message.guild.id, message.author.id, message.member);
+          Object.assign(account, currentAccount);
+          await interaction.update({ components: renderShop(currentAccount, items, selectedCat, selectedPage) });
           return;
         }
         if (interaction.customId === 'economy_shop_category') {
@@ -5226,7 +5314,7 @@ async function showShop(message, args) {
           account.ownedItems = [...categoryAccount.ownedItems];
           account.levelBonuses = categoryAccount.levelBonuses;
           await interaction.update({
-            components: createShopComponents(
+            components: renderShop(
               categoryAccount,
               categoryShopItems,
               selectedCat,
@@ -5275,7 +5363,7 @@ async function showShop(message, args) {
           account.ownedItems = [...pageAccount.ownedItems];
           account.levelBonuses = pageAccount.levelBonuses;
           await modalInteraction.update({
-            components: createShopComponents(
+            components: renderShop(
               pageAccount,
               pageShopItems,
               selectedCat,
@@ -5313,7 +5401,7 @@ async function showShop(message, args) {
           account.ownedItems = [...pageAccount.ownedItems];
           account.levelBonuses = pageAccount.levelBonuses;
           await interaction.update({
-            components: createShopComponents(
+            components: renderShop(
               pageAccount,
               pageShopItems,
               selectedCat,
@@ -5326,6 +5414,21 @@ async function showShop(message, args) {
           return;
         }
         const requestedItemId = interaction.customId.slice('economy_shop_buy:'.length);
+        let customEmoji = null;
+        if (requestedItemId === 'custom_badge') {
+          collector.resetTimer();
+          const submitted = await waitForCustomBadgeModal(interaction);
+          if (!submitted) return;
+          interaction = submitted;
+          customEmoji = interaction.fields.getTextInputValue('badge_emoji').trim();
+          if (!isCustomBadgeEmoji(customEmoji)) {
+            await interaction.reply({
+              content: 'invalid emoji. use one standard emoji. no money was charged.',
+              flags: MessageFlags.Ephemeral
+            });
+            return;
+          }
+        }
         let updatedEconomyData = loadEconomy();
         let updatedAccount = getAccount(
           updatedEconomyData,
@@ -5364,13 +5467,19 @@ async function showShop(message, args) {
         }
         updatedAccount.wallet -= item.price;
         updatedAccount.ownedItems.push(item.id);
+        if (customEmoji) {
+          updatedAccount.customBadgeEmoji = customEmoji;
+          updatedAccount.customBadgePurchaseId = interaction.id;
+          updatedAccount.settings.hiddenBadgeIds = (updatedAccount.settings.hiddenBadgeIds || []).filter(id => id !== 'custom_badge');
+        }
         saveEconomy(updatedEconomyData);
         try {
-          await grantShopItemRole(message, item);
+          if (item.id !== 'custom_badge') await grantShopItemRole(message, item);
         } catch (error) {
           const refundData = loadEconomy();
           const refundAccount = getAccount(refundData, message.guild.id, message.author.id, message.member);
           refundAccount.wallet += item.price;
+          if (customEmoji) delete refundAccount.customBadgeEmoji;
           refundAccount.ownedItems = refundAccount.ownedItems.filter(id => id !== item.id);
           saveEconomy(refundData);
           throw error;
@@ -5389,7 +5498,7 @@ async function showShop(message, args) {
         account.ownedItems = [...updatedAccount.ownedItems];
         account.levelBonuses = updatedAccount.levelBonuses;
         await interaction.update({
-          components: createShopComponents(
+          components: renderShop(
             updatedAccount,
             updatedShopItems,
             selectedCat,
@@ -5416,7 +5525,7 @@ async function showShop(message, args) {
     collector.on('end', async () => {
       await shopMessage
         .edit({
-          components: createShopComponents(
+          components: renderShop(
             account,
             shopItems,
             selectedCat,
@@ -5444,13 +5553,14 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
     types: {
       achievement: '🏆 Achievement Badge',
       milestone: '📈 Leveling Milestone Badge',
-      role: '🎭 Role Badge'
+      role: '🎭 Role Badge',
+      custom: '✨ Custom Badge'
     },
     locked: '🔒 Locked',
-    shown: '🔓 Unlocked • Shown',
-    hidden: '🔓 Unlocked • Hidden',
-    equipped: '🔓 Unlocked • Equipped',
-    unequipped: '🔓 Unlocked • Not equipped',
+    shown: '🔓 Unlocked\n✔️Shown',
+    hidden: '🔓 Unlocked\n✖️Hidden',
+    equipped: '🔓 Unlocked\n✔️Equipped',
+    unequipped: '🔓 Unlocked\n✖️Not equipped',
     show: 'Show Badge',
     hide: 'Hide Badge',
     equip: 'Equip Milestone',
@@ -5463,7 +5573,8 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
   const hiddenIds = new Set(account.settings.hiddenBadgeIds || []);
   const ownedIds = new Set([
     ...(account.achievements || []),
-    ...(account.levelBadges || [])
+    ...(account.levelBadges || []),
+    ...getCustomBadges(account).map(badge => badge.id)
   ]);
   const selected = levelRewards.selectedBadge(account);
   const pageBadges = badges.slice(
@@ -5507,7 +5618,7 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
       : [
           `### ${badge.badge} **${badge.name}**`,
           `> **${description}**`,
-          `> -# **${status}**`,
+          ...status.split('\n').map(line => `> -# **${line}**`),
           `> -# **${text.types[type] || text.types.achievement}**`,
         ].join('\n');
 
@@ -5544,6 +5655,16 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
     );
   }
 
+  if (pageBadges.some(badge => badge.id === 'custom_badge') && getCustomBadges(account).length) {
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId('badge_delete_custom')
+        .setLabel('Delete Custom Badge')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(disableAll)
+    ));
+  }
+
   if (!pageBadges.length) {
     container.addTextDisplayComponents(
       new TextDisplayBuilder().setContent('No badges are available yet.')
@@ -5576,12 +5697,64 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
   return components;
 }
 
+async function confirmCustomBadgeDelete(interaction, message) {
+  const data = loadEconomy();
+  const account = getAccount(data, message.guild.id, message.author.id, message.member);
+  if (!getCustomBadges(account).length) {
+    await interaction.reply({ content: 'Your custom badge was removed.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+  const purchaseId = account.customBadgePurchaseId;
+  const emoji = account.customBadgeEmoji;
+  const confirmId = `badge_delete_confirm:${interaction.id}`;
+  const cancelId = `badge_delete_cancel:${interaction.id}`;
+  await interaction.reply({
+    content: `Delete your ${emoji} **Custom Badge**?\n\n**You will not get any money back.** Deleting it only lets you buy the item again in \`?shop\` to choose another emoji. You will have to pay again.`,
+    flags: MessageFlags.Ephemeral,
+    components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(confirmId).setLabel('Delete (No Refund)').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(cancelId).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
+    )],
+    allowedMentions: { parse: [] }
+  });
+  const prompt = await interaction.fetchReply();
+  let choice;
+  try {
+    choice = await prompt.awaitMessageComponent({
+      componentType: ComponentType.Button,
+      filter: button => button.user.id === message.author.id && [confirmId, cancelId].includes(button.customId),
+      time: 60000
+    });
+  } catch {
+    await interaction.editReply({ content: 'Confirmation expired. Nothing was changed.', components: [] }).catch(() => {});
+    return;
+  }
+  await choice.deferUpdate();
+  if (choice.customId === cancelId) {
+    await choice.editReply({ content: 'Cancelled. Nothing was changed.', components: [] });
+    return;
+  }
+  const freshData = loadEconomy();
+  const fresh = getAccount(freshData, message.guild.id, message.author.id, message.member);
+  if (!getCustomBadges(fresh).length || fresh.customBadgePurchaseId !== purchaseId || fresh.customBadgeEmoji !== emoji) {
+    await choice.editReply({ content: 'Your custom badge has changed or was already deleted. Use ?badges to manage it.', components: [] });
+    return;
+  }
+  fresh.ownedItems = fresh.ownedItems.filter(id => id !== 'custom_badge');
+  delete fresh.customBadgeEmoji;
+  delete fresh.customBadgePurchaseId;
+  fresh.settings.hiddenBadgeIds = (fresh.settings.hiddenBadgeIds || []).filter(id => id !== 'custom_badge');
+  saveEconomy(freshData);
+  await choice.editReply({ content: 'Custom badge deleted. No money was refunded. You can buy it again in `?shop` to use another emoji.', components: [] });
+}
+
 async function showBadgeSettings(message) {
-  const badges = [...loadAchievements().filter(achievement => achievement.badge), ...levelRewards.badges];
+  let badges = [];
   const readAccount = () => {
     const data = loadEconomy();
     const account = getAccount(data, message.guild.id, message.author.id, message.member);
     if (!Array.isArray(account.settings.hiddenBadgeIds)) account.settings.hiddenBadgeIds = [];
+    badges = [...loadAchievements().filter(achievement => achievement.badge), ...levelRewards.badges, ...getCustomBadges(account)];
     return { data, account };
   };
   let page = 0;
@@ -5599,13 +5772,21 @@ async function showBadgeSettings(message) {
         await interaction.reply({ content: 'Only the person who opened these settings can use these buttons.', flags: MessageFlags.Ephemeral });
         return;
       }
+      if (interaction.customId === 'badge_delete_custom') {
+        collector.resetTimer();
+        await confirmCustomBadgeDelete(interaction, message);
+        const fresh = readAccount();
+        page = Math.min(page, Math.max(0, Math.ceil(badges.length / badgePageSize) - 1));
+        await panel.edit({ components: createBadgeSettingsComponents(fresh.account, badges, page, collector.ended) });
+        return;
+      }
       await interaction.deferUpdate();
       const { data, account } = readAccount();
       if (interaction.customId === 'badge_previous') page = Math.max(0, page - 1);
-      else if (interaction.customId === 'badge_next') page = Math.min(Math.max(0, Math.ceil(badges.length / 5) - 1), page + 1);
+      else if (interaction.customId === 'badge_next') page = Math.min(Math.max(0, Math.ceil(badges.length / badgePageSize) - 1), page + 1);
       else if (interaction.customId.startsWith('badge_toggle:')) {
         const id = interaction.customId.slice('badge_toggle:'.length);
-        if ([...account.achievements, ...(account.levelBadges || [])].includes(id) && badges.some(badge => badge.id === id && badge.badge)) {
+        if ([...account.achievements, ...(account.levelBadges || []), ...getCustomBadges(account).map(badge => badge.id)].includes(id) && badges.some(badge => badge.id === id && badge.badge)) {
           if (!levelRewards.toggleBadge(account, id)) {
             const hidden = new Set(account.settings.hiddenBadgeIds);
             if (hidden.has(id)) hidden.delete(id);

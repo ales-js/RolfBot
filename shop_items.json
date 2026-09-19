@@ -46,12 +46,21 @@
       "enabled": true
     },
     {
+      "id": "custom_badge",
+      "name": "Custom Badge",
+      "description": "-# a permanent custom badge. only standard emojis allowed. manage badges with `?badges`",
+      "price": 20000,
+      "emoji": "💠",
+      "category": "Badges",
+      "enabled": true
+    },
+    {
       "id": "custom_role_10k",
       "name": "Custom Role (Name and Non-Gradient Color)",
       "description": "-# a permanent custom role with a name and non-gradient color of your choice.\n-# after purchasing this item, make sure to open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718 to redeem it.",
       "price": 10000,
       "emoji": "✨",
-      "category": "Roles",
+      "category": "Custom Roles",
       "enabled": true
     },
     {
@@ -60,7 +69,7 @@
       "description": "-# a permanent custom role with a name and color gradient of your choice.\n-# after purchasing this item, make sure to open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718 to redeem it.",
       "price": 25000,
       "emoji": "⭐",
-      "category": "Roles",
+      "category": "Custom Roles",
       "enabled": true
     },
     {
@@ -69,7 +78,7 @@
       "description": "-# a permanent custom role with a name, color gradient and role icon of your choice.\n-# after purchasing this item, make sure to open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718 to redeem it.",
       "price": 50000,
       "emoji": "🌟",
-      "category": "Roles",
+      "category": "Custom Roles",
       "enabled": true
     }
   ]
