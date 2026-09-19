@@ -55,28 +55,28 @@
       "enabled": true
     },
     {
-      "id": "custom_role_10k",
+      "id": "custom_role_25k",
       "name": "Custom Role (Name and Non-Gradient Color)",
       "description": "-# a permanent custom role with a name and non-gradient color of your choice.\n-# after purchasing this item, make sure to open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718 to redeem it.",
-      "price": 10000,
+      "price": 25000,
       "emoji": "✨",
       "category": "Custom Roles",
       "enabled": true
     },
     {
-      "id": "custom_role_25k",
+      "id": "custom_role_50k",
       "name": "Custom Role (Name and Color Gradient)",
       "description": "-# a permanent custom role with a name and color gradient of your choice.\n-# after purchasing this item, make sure to open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718 to redeem it.",
-      "price": 25000,
+      "price": 50000,
       "emoji": "⭐",
       "category": "Custom Roles",
       "enabled": true
     },
     {
-      "id": "custom_role_50k",
+      "id": "custom_role_75k",
       "name": "Custom Role (Name, Color Gradient and Role Icon)",
       "description": "-# a permanent custom role with a name, color gradient and role icon of your choice.\n-# after purchasing this item, make sure to open a ticket in https://discord.com/channels/1531931159326625802/1532834598181011718 to redeem it.",
-      "price": 50000,
+      "price": 100000,
       "emoji": "🌟",
       "category": "Custom Roles",
       "enabled": true

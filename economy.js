@@ -902,9 +902,9 @@ function getShopCategories(shopItems) {
 }
 
 const customRoleOptions = new Map([
-  ['custom_role_10k', 'Name + Color'],
-  ['custom_role_25k', 'Name + Gradient'],
-  ['custom_role_50k', 'Name + Gradient + Icon']
+  ['custom_role_25k', 'Name + Color'],
+  ['custom_role_50k', 'Name + Gradient'],
+  ['custom_role_75k', 'Name + Gradient + Icon']
 ]);
 
 function getShopItemsForCategory(shopItems, selectedCat) {
