@@ -1257,10 +1257,12 @@ function createAchievementComponents(
   return components;
 }
 
+const xpBarLength = 17
+
 const economyEmbeds = {
   level(message, progress) {
-    const filled = Math.max(0, Math.min(18, Math.round(progress.progressXp / progress.requiredXp * 18)));
-    const bar = '[' + '▰'.repeat(filled) + '▱'.repeat(18 - filled) + ']';
+    const filled = Math.max(0, Math.min(xpBarLength, Math.round(progress.progressXp / progress.requiredXp * xpBarLength)));
+    const bar = '[' + '▰'.repeat(filled) + '▱'.repeat(xpBarLength - filled) + ']';
     const percentage = (progress.progressXp / progress.requiredXp * 100).toFixed(1);
     const activity = activityStore.getStats(message.guild.id, message.author.id);
     const seconds = Math.floor(activity.voiceMs / 1000);
@@ -1280,7 +1282,7 @@ const economyEmbeds = {
       .addFields(
         {
           name: `Level ${progress.level}`,
-          value: `\`${bar}\` ${percentage}%`,
+          value: `\`\`\`cs\n${bar} ${percentage}%\n\`\`\``,
           inline: false
         }
       )
