@@ -3668,23 +3668,61 @@ async function showHelp(message) {
 }
 
 const levelRewardButtonIds = {
-  first: 'level_rewards_first', previous: 'level_rewards_previous',
-  page: 'level_rewards_page', next: 'level_rewards_next', last: 'level_rewards_last'
+  first: 'level_rewards_first',
+  previous: 'level_rewards_previous',
+  page: 'level_rewards_page',
+  next: 'level_rewards_next',
+  last: 'level_rewards_last',
+  current: 'level_rewards_current'
 };
 
+function getCurrentLevelRewardIndex(level) {
+  const rewards = levelRewards.rewards;
+  const next = rewards.findIndex(reward => reward.level > level);
+  return next === -1 ? Math.max(0, rewards.length - 1) : Math.max(0, next - 1);
+}
+
 function createLevelRewardButtons(page, total, disabled = false) {
-  return createPaginationButtons(levelRewardButtonIds, page, total, disabled);
+  return [
+    createPaginationButtons(levelRewardButtonIds, page, total, disabled),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(levelRewardButtonIds.current)
+        .setLabel('Jump to Current Level')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(disabled)
+    )
+  ];
 }
 
 function createLevelRewardsEmbed(message, account, page, total) {
-  const level = Math.max(xpStore.getUserProgress(message.author.id).level, account.levelRewardLevel || 1);
+  const currentLevel = xpStore.getUserProgress(message.author.id).level;
+  const unlockedLevel = Math.max(currentLevel, account.levelRewardLevel || 1);
+  const currentIndex = getCurrentLevelRewardIndex(currentLevel);
+  const rewards = levelRewards.rewards;
+  const fields = rewards.slice(page * 5, page * 5 + 5).map(reward => ({
+    name: `${unlockedLevel >= reward.level ? '🔓 Unlocked' : '🔒 Locked'} • Level ${reward.level}${reward.level === currentLevel ? ' <- current level' : ''}`,
+    value: levelRewards.describe(reward, config)
+  }));
+
+  if (
+    page === Math.floor(currentIndex / 5) &&
+    !rewards.some(reward => reward.level === currentLevel)
+  ) {
+    const position = rewards[currentIndex]?.level < currentLevel
+      ? currentIndex % 5 + 1
+      : 0;
+
+    fields.splice(position, 0, {
+      name: `Level ${currentLevel} <- current level`,
+      value: 'No reward at this level.'
+    });
+  }
+
   return createEconomyEmbed(message, account.settings.embedColor)
     .setTitle('Level Rewards')
-    .setDescription(`Your level: **${xpStore.getUserProgress(message.author.id).level}**`)
-    .addFields(levelRewards.rewards.slice(page * 5, page * 5 + 5).map(reward => ({
-      name: `${level >= reward.level ? '🔓 Unlocked' : '🔒 Locked'} • Level ${reward.level}`,
-      value: levelRewards.describe(reward, config)
-    })))
+    .setDescription(`Your level: **${currentLevel}**`)
+    .addFields(fields)
     .setFooter({ text: `Page ${page + 1}/${total}` });
 }
 
@@ -3731,14 +3769,11 @@ async function showLevelRewards(message) {
     );
     let currentPage = 0;
     const embed = createLevelRewardsEmbed(message, account, currentPage, totalPages);
-    const components = totalPages > 1 ? [createLevelRewardButtons(currentPage, totalPages)] : [];
+    const components = createLevelRewardButtons(currentPage, totalPages);
     const helpMessage = await message.reply({
       embeds: [embed],
       components
     });
-    if (totalPages <= 1) {
-      return helpMessage;
-    }
     const collector = helpMessage.createMessageComponentCollector({
       componentType: ComponentType.Button,
       time: helpConfig.buttonTimeoutMinutes * 60 * 1000
@@ -3756,7 +3791,10 @@ async function showLevelRewards(message) {
           return;
         }
         let pageInteraction = interaction;
-        if (interaction.customId === levelRewardButtonIds.first) {
+        if (interaction.customId === levelRewardButtonIds.current) {
+          const level = xpStore.getUserProgress(message.author.id).level;
+          currentPage = Math.floor(getCurrentLevelRewardIndex(level) / 5);
+        } else if (interaction.customId === levelRewardButtonIds.first) {
           currentPage = 0;
         } else if (interaction.customId === levelRewardButtonIds.previous) {
           currentPage = Math.max(0, currentPage - 1);
@@ -3792,7 +3830,7 @@ async function showLevelRewards(message) {
         );
         await pageInteraction.update({
           embeds: [updatedEmbed],
-          components: [createLevelRewardButtons(currentPage, totalPages)]
+          components: createLevelRewardButtons(currentPage, totalPages)
         });
       } catch (error) {
         console.error('[ECONOMY ERROR]: Failed to change level rewards page:', error);
@@ -3809,7 +3847,7 @@ async function showLevelRewards(message) {
     collector.on('end', async () => {
       await helpMessage
         .edit({
-          components: [createLevelRewardButtons(currentPage, totalPages, true)]
+          components: createLevelRewardButtons(currentPage, totalPages, true)
         })
         .catch(() => {});
     });
