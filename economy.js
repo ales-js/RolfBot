@@ -6350,7 +6350,27 @@ async function handleEconomyCommand(message) {
   }
   const commandParts = message.content.slice(commandPrefix.length).trim().split(/\s+/);
   const cmdName = commandParts.shift()?.toLowerCase();
+
+  if (cmdName === 'berliner') {
+    const emojis = [
+      '<:burleiner_1:1544816484990324857>',
+      '<:burleiner_2:1544816554711982172>',
+      '<:burleiner_3:1544816611381215345>'
+    ];
+
+    await message.channel.send(emojis.join(''));
+
+    for (const emoji of emojis) {
+      await message.react(emoji).catch(error => {
+        console.error('[BERLINER]: could not react:', error);
+      });
+    }
+
+    return true;
+  }
+
   const adminCommand = getAdminCommand(cmdName, commandParts);
+  
   if (adminCommand) {
     if (typeof config.ownerId !== 'string' || message.author.id !== config.ownerId) {
       logAdminCommand(message, 'DENIED');
