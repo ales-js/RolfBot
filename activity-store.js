@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { guildId: allowedGuildId } = require('./config.json');
 
 const file = path.join(__dirname, 'activity.json');
 const stored = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
@@ -41,6 +42,7 @@ function flush() {
 }
 
 function recordMessage(message) {
+  if (message.guild?.id !== allowedGuildId) return;
   if (!message.guild || message.author.bot || message.webhookId || message.system) return;
   const guildId = message.guild.id;
   const userId = message.author.id;
@@ -59,6 +61,7 @@ function getStats(guildId, userId) {
 }
 
 function updateVoice(state) {
+  if (state.guild.id !== allowedGuildId) return;
   const key = `${state.guild.id}:${state.id}`;
   if (state.channelId && state.member?.user.bot === false) {
     if (!sessions.has(key)) sessions.set(key, { guildId: state.guild.id, userId: state.id, since: Date.now() });
@@ -73,6 +76,7 @@ function start(client) {
   const sync = shardId => {
     checkpoint();
     for (const guild of client.guilds.cache.values()) {
+      if (guild.id !== allowedGuildId) continue;
       if (shardId !== undefined && guild.shardId !== shardId) continue;
       for (const [key, session] of sessions) if (session.guildId === guild.id) sessions.delete(key);
       if (guild.available !== false) for (const state of guild.voiceStates.cache.values()) updateVoice(state);
@@ -84,12 +88,14 @@ function start(client) {
   };
   client.once('ready', safe(() => sync()));
   client.on('voiceStateUpdate', safe((oldState, newState) => {
+    if (newState.guild.id !== allowedGuildId) return;
     checkpoint();
     updateVoice(newState);
     save();
   }));
   client.on('guildCreate', safe(() => sync()));
   const stopGuild = guild => {
+    if (guild.id !== allowedGuildId) return;
     checkpoint();
     for (const [key, session] of sessions) if (session.guildId === guild.id) sessions.delete(key);
     save();
@@ -122,6 +128,7 @@ function getHistoryStatus(guildId) {
 }
 
 async function scanMessages(guild, force = false) {
+  if (guild.id !== allowedGuildId) return;
   if (scans.has(guild.id)) {
     console.log('[MESSAGES]: scan already running.');
     return;

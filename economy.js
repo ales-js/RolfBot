@@ -957,7 +957,7 @@ function createShopComponents(
   selectedCat = 'all',
   page = 0,
   disableAll = false,
-  selectedCustomRole = 'custom_role_10k'
+  selectedCustomRole = 'custom_role_25k'
 ) {
   const visibleItems = getShopItemsForCategory(shopItems, selectedCat);
   const totalPages = getShopPageCount(shopItems, selectedCat);
@@ -2255,6 +2255,7 @@ function loadEconomy() {
     }
     registerRankStats();
     for (const [guildId, guild] of Object.entries(data.guilds)) {
+      if (guildId !== config.guildId) continue;
       for (const userId of Object.keys(guild.users || {})) getAccount(data, guildId, userId);
     }
     return data;
@@ -2563,6 +2564,7 @@ function saveEconomy(data) {
   data.statCatalog = Object.fromEntries([...extraStats].filter(([key]) => /^(shop_item_|shop_category_|achievements_)/.test(key))
     .map(([key, def]) => [key, { label: def.label, type: def.type }]));
   for (const [guildId, guild] of Object.entries(data.guilds)) {
+    if (guildId !== config.guildId) continue;
     for (const userId of Object.keys(guild.users || {})) getAccount(data, guildId, userId);
   }
   updateRankRecords(data);
@@ -3727,6 +3729,7 @@ function createLevelRewardsEmbed(message, account, page, total) {
 }
 
 function syncLevelRewards(guildId, userId, member) {
+  if (guildId !== config.guildId) return;
   const data = loadEconomy();
   const account = getAccount(data, guildId, userId, member);
   saveEconomy(data);
@@ -3734,6 +3737,7 @@ function syncLevelRewards(guildId, userId, member) {
 }
 
 async function backfillLevelRewards(guild) {
+  if (guild.id !== config.guildId) return;
   const members = await guild.members.fetch();
   const data = loadEconomy();
   let count = 0;
@@ -5294,7 +5298,7 @@ async function showShop(message, args) {
     const shopItems = loadShopItems();
     let selectedCat = 'all';
     let selectedPage = 0;
-    let selectedCustomRole = 'custom_role_10k';
+    let selectedCustomRole = 'custom_role_25k';
     const renderShop = (currentAccount, items, category, page, disabled = false) =>
       createShopComponents(currentAccount, items, category, page, disabled, selectedCustomRole);
     saveEconomy(economyData);
@@ -6282,6 +6286,7 @@ async function completeEconomyCommand(message, action) {
 }
 
 async function removeDepartedEconomyUser(guild, userId) {
+  if (guild.id !== config.guildId) return;
   if (guild.available === false || !guild.client.isReady()) return;
   if (rouletteGames.get(guild.id)?.bets.some((bet) => bet.userId === userId)) return;
   try {
@@ -6307,6 +6312,7 @@ async function removeDepartedEconomyUser(guild, userId) {
 async function cleanupDepartedEconomyUsers(client) {
   if (!client.isReady()) return;
   for (const guild of client.guilds.cache.values()) {
+    if (guild.id !== config.guildId) continue;
     if (guild.available === false || cleanupRunning.has(guild.id)) continue;
     cleanupRunning.add(guild.id);
     try {
@@ -6344,6 +6350,7 @@ function initializeEconomyCleanup(client) {
 }
 
 async function handleEconomyCommand(message) {
+  if (message.guild?.id !== config.guildId) return false;
   initializeEconomyCleanup(message.client);
   if (message.author.bot || !message.guild || !message.content.startsWith(commandPrefix)) {
     return false;
@@ -6825,6 +6832,7 @@ function updateRankRecords(data, now = Date.now()) {
   const today = statDay(now);
   const xpRanks = getLevelLeaderboardEntries();
   for (const [guildId, guild] of Object.entries(data.guilds)) {
+    if (guildId !== config.guildId) continue;
     const users = guild.users || {};
     const history = guild.statRankTracking ||= { day: today, leaders: {} };
     if (history.day !== today) {
@@ -6864,12 +6872,14 @@ function startStatsClock(client) {
     try {
       const data = loadEconomy();
       for (const [guildId, guild] of Object.entries(data.guilds)) {
+        if (guildId !== config.guildId) continue;
         for (const id of Object.keys(guild.users || {})) getAccount(data, guildId, id, client.guilds.cache.get(guildId)?.members.cache.get(id));
       }
       saveEconomy(data);
     } catch (error) { console.error('[ECONOMY STATS]: failed to update daily records:', error); }
   };
   client.on('guildMemberUpdate', (_old, member) => {
+    if (member.guild.id !== config.guildId) return;
     try {
       const data = loadEconomy();
       if (!data.guilds[member.guild.id]?.users?.[member.id]) return;

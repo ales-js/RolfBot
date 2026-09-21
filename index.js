@@ -27,6 +27,20 @@ const voiceXp = require('./vc-xp');
 
 const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+if (typeof config.guildId !== 'string' || !/^\d{17,20}$/.test(config.guildId)) {
+  throw new Error('err invalid config.json guildId');
+}
+
+function logGuildAccess(action, guild, user, command) {
+  console.log('[SERVER ACCESS]:', JSON.stringify({
+    action,
+    guild: guild?.name || 'Unknown server / DM',
+    guildId: guild?.id || null,
+    user: user?.tag || null,
+    userId: user?.id || null,
+    command: command || null
+  }));
+}
 
 const lvlRoles = [
   { level: 5, roleId: config.lvlRole1Id },
@@ -47,6 +61,10 @@ const client = new Client({
 });
 
 activityStore.start(client);
+
+client.on('guildCreate', guild => {
+  logGuildAccess(guild.id === config.guildId ? 'added to IFA Wartburg server.' : 'added to unauthorized server: disabled: ', guild);
+});
 
 client.commands = new Collection();
 
@@ -138,6 +156,10 @@ client.once('ready', readyClient => {
     award: (member, xp) => awardXp(member.guild, member.user, member, xp, null, true)
   });
   for (const guild of readyClient.guilds.cache.values()) {
+    if (guild.id !== config.guildId) {
+      logGuildAccess('Unauthorized server at startup; disabled', guild);
+      continue;
+    }
     backfillLevelRewards(guild).catch(error => {
       console.error('[LEVEL REWARDS]: backfill failed:', error);
     });
@@ -389,6 +411,24 @@ async function checkOldXp(readyClient) {
 }
 
 client.on('interactionCreate', async interaction => {
+  if (interaction.guildId !== config.guildId) {
+    logGuildAccess('Blocked interaction', interaction.guild || { id: interaction.guildId }, interaction.user,
+      interaction.commandName || interaction.customId);
+    try {
+      if (interaction.isChatInputCommand()) {
+        await interaction.reply({
+          content: `RolfBot only works in discord.gg/ifawartburg. (${config.guildId}) this attempt has been logged.`,
+          flags: MessageFlags.Ephemeral,
+          allowedMentions: { parse: [] }
+        });
+      } else if (interaction.isAutocomplete()) {
+        await interaction.respond([]);
+      }
+    } catch (error) {
+      console.error('[SERVER ACCESS]: Failed to reply to blocked interaction:', error.message);
+    }
+    return;
+  }
   if (!interaction.isChatInputCommand()) return;
 
   const command = client.commands.get(interaction.commandName);
@@ -457,6 +497,7 @@ function getOrdinal(number) {
 
 // Welcome Message \\
 client.on('guildMemberAdd', async member => {
+  if (member.guild.id !== config.guildId) return;
   const channel = member.guild.channels.cache.get(
     config.welcomeChannelId
   );
@@ -513,6 +554,7 @@ client.on('guildMemberAdd', async member => {
 
 // Leave Message \\
 client.on('guildMemberRemove', async member => {
+  if (member.guild.id !== config.guildId) return;
   const channel = member.guild.channels.cache.get(
     config.leaveChannelId
   );
@@ -569,6 +611,7 @@ client.on('guildMemberRemove', async member => {
 
 // Boost Message \\
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
+  if (newMember.guild.id !== config.guildId) return;
   const boostChannel = newMember.guild.channels.cache.get(
     config.boostChannelId
   );
@@ -600,6 +643,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 const xpJobs = new Map();
 
 function awardXp(guild, user, member, amount, channel, fromVc = false) {
+  if (guild?.id !== config.guildId) return Promise.resolve();
   const previous = xpJobs.get(user.id) || Promise.resolve();
   const job = previous.catch(() => {}).then(async () => {
     const userId = user.id;
@@ -676,6 +720,13 @@ function awardXp(guild, user, member, amount, channel, fromVc = false) {
 // Leveling \\
 client.on('messageCreate', async message => {
   if (message.author.bot || !message.guild) return;
+  if (message.guild.id !== config.guildId) {
+    if (message.content.startsWith('?')) {
+      logGuildAccess('Blocked prefix command', message.guild, message.author,
+        message.content.trim().split(/\s+/)[0].slice(0, 100));
+    }
+    return;
+  }
 
   try {
     activityStore.recordMessage(message);
