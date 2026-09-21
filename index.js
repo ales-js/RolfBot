@@ -1,3 +1,4 @@
+const { performance } = require('node:perf_hooks');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
@@ -643,6 +644,7 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 });
 
 const xpJobs = new Map();
+const pendingLevelRewardSync = new Set();
 
 function awardXp(guild, user, member, amount, channel, fromVc = false) {
   if (guild?.id !== config.guildId) return Promise.resolve();
@@ -653,8 +655,12 @@ function awardXp(guild, user, member, amount, channel, fromVc = false) {
     const now = Date.now();
     const multiplier = powerup && powerup.startedAt <= now && powerup.expiresAt > now ? powerup.multiplier : 1;
     const result = xpStore.addXp(userId, amount * multiplier);
+    if (result.leveledUp) pendingLevelRewardSync.add(userId);
     try {
-      await syncLevelRewards(guild.id, userId, member);
+      if (pendingLevelRewardSync.has(userId)) {
+        await syncLevelRewards(guild.id, userId, member);
+        pendingLevelRewardSync.delete(userId);
+      }
     } catch (error) {
       console.error(`[LEVEL REWARDS]: failed for ${userId}:`, error);
     }
@@ -731,6 +737,26 @@ client.on('messageCreate', async message => {
         message.content.trim().split(/\s+/)[0].slice(0, 100));
     }
     return;
+  }
+
+  const timingStart = performance.now();
+  if (message.content.startsWith('?')) {
+    const originalReply = message.reply;
+    let firstReply = true;
+    message.reply = async function (...args) {
+      const started = performance.now();
+      const first = firstReply;
+      firstReply = false;
+      try {
+        return await originalReply.apply(this, args);
+      } finally {
+        if (first) {
+          const processingMs = Math.round(started - timingStart);
+          const sendingMs = Math.round(performance.now() - started);
+          console.log(`[LATENCY]: ${message.content.trim().split(/\s+/)[0]} | processing=${processingMs}ms | reply=${sendingMs}ms`);
+        }
+      }
+    };
   }
 
   try {

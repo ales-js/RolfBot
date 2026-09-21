@@ -44,6 +44,9 @@ const configPath = path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 const repeatCdMs = 500;
 const cmdCooldowns = new Map();
+const cooldownNotices = new Map();
+const pendingCommands = new Set();
+const pendingCommandStatistics = new WeakMap();
 const cleanupClients = new WeakSet();
 const cleanupRunning = new Set();
 const cleanupIntervalMs = 60 * 60 * 1000;
@@ -1075,7 +1078,7 @@ function addMentionBadges(text, guildId) {
   if (!guildId || !/<@!?\d+>/.test(text)) return text;
   try {
     if (!fs.existsSync(economyFile) || !fs.existsSync(achievementsFile)) return text;
-    const users = JSON.parse(readJsonText(economyFile)).guilds?.[guildId]?.users || {};
+    const users = readEconomyView().guilds?.[guildId]?.users || {};
     const achievements = loadAchievements();
     return text.replace(/<@!?(\d+)>/g, (mention, userId, offset) => {
       const badges = getLeaderboardBadges(users[userId], achievements);
@@ -1097,7 +1100,7 @@ function createEconomyEmbed(message, color, author = message.author) {
   try {
     const guildId = message.guild?.id || message.guildId;
     if (guildId && fs.existsSync(economyFile) && fs.existsSync(achievementsFile)) {
-      const data = JSON.parse(readJsonText(economyFile));
+      const data = readEconomyView();
       const account = data.guilds?.[guildId]?.users?.[author.id];
       badges = getLeaderboardBadges(account, loadAchievements())
         .replace(/<a?:([A-Za-z0-9_]+):[0-9]+>/g, ' :$1: ')
@@ -2216,6 +2219,20 @@ const economyEmbeds = {
 
 const jsonFileCache = new Map();
 const definitionCache = new Map();
+let economyReadCache = { text: null, data: null };
+
+function readEconomyView() {
+  if (!fs.existsSync(economyFile)) {
+    economyReadCache = { text: null, data: null };
+    return { guilds: {} };
+  }
+  const text = readJsonText(economyFile);
+  if (economyReadCache.text !== text || !economyReadCache.data) {
+    const data = text.trim() ? JSON.parse(text) : {};
+    economyReadCache = { text, data };
+  }
+  return economyReadCache.data;
+}
 const moneyFormatter = new Intl.NumberFormat('en-US');
 const xpFormatter = new Intl.NumberFormat('en-US', {
   notation: 'compact',
@@ -2257,7 +2274,7 @@ function saveJsonFile(file, data) {
   const temporaryFile = `${file}.tmp`;
   fs.writeFileSync(temporaryFile, text);
   fs.renameSync(temporaryFile, file);
-  jsonFileCache.delete(file);
+  jsonFileCache.set(file, { stamp: getJsonFileStamp(file), text });
 }
 
 function loadEconomy() {
@@ -2279,9 +2296,10 @@ function loadEconomy() {
       }
     }
     registerRankStats();
+    const xpUsers = xpStore.loadXp();
     for (const [guildId, guild] of Object.entries(data.guilds)) {
       if (guildId !== config.guildId) continue;
-      for (const userId of Object.keys(guild.users || {})) getAccount(data, guildId, userId);
+      for (const userId of Object.keys(guild.users || {})) getAccount(data, guildId, userId, undefined, xpUsers);
     }
     return data;
   } catch (error) {
@@ -2307,7 +2325,7 @@ function getXpPowerup(guildId, userId) {
   const stats = fs.statSync(economyFile);
   const stamp = `${stats.mtimeMs}:${stats.ctimeMs}:${stats.size}`;
   if (stamp !== xpPowerupCache.stamp) {
-    const data = JSON.parse(readJsonText(economyFile));
+    const data = readEconomyView();
     xpPowerupCache = { stamp, users: data.guilds?.[guildId]?.users || {} };
   }
   return xpPowerupCache.users[userId]?.xpPowerup || null;
@@ -2605,9 +2623,10 @@ function loadXp() {
 function saveEconomy(data) {
   data.statCatalog = Object.fromEntries([...extraStats].filter(([key]) => /^(shop_item_|shop_category_|achievements_)/.test(key))
     .map(([key, def]) => [key, { label: def.label, type: def.type }]));
+  const xpUsers = xpStore.loadXp();
   for (const [guildId, guild] of Object.entries(data.guilds)) {
     if (guildId !== config.guildId) continue;
-    for (const userId of Object.keys(guild.users || {})) getAccount(data, guildId, userId);
+    for (const userId of Object.keys(guild.users || {})) getAccount(data, guildId, userId, undefined, xpUsers);
   }
   updateRankRecords(data);
   saveJsonFile(economyFile, data);
@@ -2646,7 +2665,7 @@ function defaultEmbedColor(member) {
   return colorRole?.hexColor || '#FF0000';
 }
 
-function getAccount(data, guildId, userId, member) {
+function getAccount(data, guildId, userId, member, xpUsers) {
   const memberDefaultEmbedColor = defaultEmbedColor(member);
   if (!data.guilds[guildId]) {
     data.guilds[guildId] = {
@@ -2757,7 +2776,8 @@ function getAccount(data, guildId, userId, member) {
   }
   activityAccounts.set(account, { guildId, userId });
   syncExtraStats(account, member);
-  levelRewards.apply(data, account, guildId, userId, xpStore.getUserProgress(userId).level);
+  levelRewards.apply(data, account, guildId, userId,
+    xpUsers ? (xpUsers[userId]?.level ?? 1) : xpStore.getUserProgress(userId).level);
   return account;
 }
 
@@ -3006,11 +3026,16 @@ function getLeaderboardEntries(data, guildId, category) {
       })
       .sort((a, b) => b.value - a.value || a.userId.localeCompare(b.userId));
   }
-  const entries = Object.entries(users)
-    .map(([userId, account]) => ({
-      userId,
-      value: getLeaderboardValue(account, category)
-    }));
+  const isStatistic = statisticNames.includes(category);
+  const entries = Object.entries(users).map(([userId, account]) => {
+    if (isStatistic) {
+      const value = account?.achievementStats?.[category];
+      return { userId, value: Number.isFinite(value) ? value : 0 };
+    }
+    const wallet = Number.isFinite(account?.wallet) ? account.wallet : 0;
+    const bank = Number.isFinite(account?.bank) ? account.bank : 0;
+    return { userId, value: category === 'wallet' ? wallet : category === 'bank' ? bank : wallet + bank };
+  });
   if (category === 'debt') {
     return entries
       .filter((entry) => entry.value < 0)
@@ -3112,14 +3137,20 @@ function getDailyIncomeRoles(member) {
   return incomeRoles;
 }
 
+const incomeDatePartsCache = new Map();
+
 function getDailyIncomeDateTimeParts(timestamp) {
-  const dateTimeParts = {};
-  for (const part of incomeDateFmt.formatToParts(new Date(timestamp))) {
-    if (part.type !== 'literal') {
-      dateTimeParts[part.type] = Number(part.value);
+  const second = Math.floor(Number(timestamp) / 1000);
+  let parts = incomeDatePartsCache.get(second);
+  if (!parts) {
+    parts = {};
+    for (const part of incomeDateFmt.formatToParts(new Date(timestamp))) {
+      if (part.type !== 'literal') parts[part.type] = Number(part.value);
     }
+    if (incomeDatePartsCache.size >= 120) incomeDatePartsCache.clear();
+    incomeDatePartsCache.set(second, parts);
   }
-  return dateTimeParts;
+  return { ...parts };
 }
 
 function getDailyIncomeDateKey(timestamp) {
@@ -3942,11 +3973,16 @@ async function showBalance(message, args = []) {
         embeds: [embed]
       });
     }
-    const economyData = loadEconomy();
+    let economyData = readEconomyView();
     const target = mentionedUser || message.author;
     const targetMember = mentionedMember || message.member;
-    const account = getAccount(economyData, message.guild.id, target.id, targetMember);
-    saveEconomy(economyData);
+    let account = economyData.guilds?.[message.guild.id]?.users?.[target.id];
+    if (!account || !Number.isFinite(account.wallet) || !Number.isFinite(account.bank) ||
+        typeof account.settings?.embedColor !== 'string') {
+      economyData = loadEconomy();
+      account = getAccount(economyData, message.guild.id, target.id, targetMember);
+      saveEconomy(economyData);
+    }
     const total = account.wallet + account.bank;
     const totalLeaderboardEntries = getLeaderboardEntries(economyData, message.guild.id, 'total');
     const leaderboardRank =
@@ -5158,13 +5194,14 @@ async function giveMoney(message, args) {
   }
 }
 
-async function slot(message, args) {
+async function slot(message, args, commandData) {
   try {
-    const economyData = loadEconomy();
+    const economyData = commandData || loadEconomy();
     const account = getAccount(economyData, message.guild.id, message.author.id, message.member);
     const requestedAmount = args[0]?.toLowerCase();
     if (!requestedAmount || args.length !== 1) {
       const embed = economyEmbeds.slotInvalidArguments(message, !requestedAmount);
+      saveEconomy(economyData);
       return message.reply({
         embeds: [embed]
       });
@@ -5180,6 +5217,7 @@ async function slot(message, args) {
       const amountWithoutCommas = requestedAmount.replace(/,/g, '');
       if (!/^\d+$/.test(amountWithoutCommas)) {
         const embed = economyEmbeds.slotInvalidAmount(message, requestedAmount);
+        saveEconomy(economyData);
         return message.reply({
           embeds: [embed]
         });
@@ -5188,12 +5226,14 @@ async function slot(message, args) {
     }
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       const embed = economyEmbeds.slotInvalidWholeNumber(message);
+      saveEconomy(economyData);
       return message.reply({
         embeds: [embed]
       });
     }
     if (amount > account.wallet) {
       const embed = economyEmbeds.slotInsufficientFunds(message, account.wallet);
+      saveEconomy(economyData);
       return message.reply({
         embeds: [embed]
       });
@@ -6363,8 +6403,17 @@ async function runAdminCommand(message, command) {
   }
 }
 
+async function flushCommandStatistics(message) {
+  const key = pendingCommandStatistics.get(message);
+  if (!key) return;
+  pendingCommandStatistics.delete(message);
+  await new Promise(resolve => setImmediate(resolve));
+  recordCommandUse(message, key);
+}
+
 async function completeEconomyCommand(message, action) {
   await action();
+  await flushCommandStatistics(message);
   await checkAndAnnounceAchievements(message);
   return true;
 }
@@ -6434,6 +6483,23 @@ function initializeEconomyCleanup(client) {
 }
 
 async function handleEconomyCommand(message) {
+  if (message.guild?.id !== config.guildId || message.author.bot ||
+      !message.content.startsWith(commandPrefix)) return false;
+  const key = `${message.guild.id}:${message.author.id}`;
+  if (pendingCommands.has(key)) return true;
+  pendingCommands.add(key);
+  try {
+    return await handleEconomyCommandInternal(message);
+  } finally {
+    try {
+      await flushCommandStatistics(message);
+    } finally {
+      pendingCommands.delete(key);
+    }
+  }
+}
+
+async function handleEconomyCommandInternal(message) {
   if (message.guild?.id !== config.guildId) return false;
   initializeEconomyCleanup(message.client);
   if (message.author.bot || !message.guild || !message.content.startsWith(commandPrefix)) {
@@ -6481,6 +6547,11 @@ async function handleEconomyCommand(message) {
   }
   const remainingCooldown = useCommandRepeatCooldown(message, cmdKey);
   if (remainingCooldown > 0) {
+    const noticeKey = `${message.guild.id}:${message.author.id}`;
+    if (cooldownNotices.has(noticeKey)) return true;
+    cooldownNotices.set(noticeKey, true);
+    const noticeTimer = setTimeout(() => cooldownNotices.delete(noticeKey), 3000);
+    noticeTimer.unref?.();
     const embed = economyEmbeds.commandRepeatCooldown(
       message,
       cmdKey,
@@ -6491,9 +6562,20 @@ async function handleEconomyCommand(message) {
     });
     return true;
   }
-  recordCommandUse(message, cmdKey);
+  pendingCommandStatistics.set(message, cmdKey);
   if (balanceAliases.has(cmdName)) {
-    return completeEconomyCommand(message, () => showBalance(message));
+    try {
+      await showBalance(message, commandParts);
+    } finally {
+      await flushCommandStatistics(message);
+    }
+    await checkAndAnnounceAchievements(message);
+    return true;
+  }
+  if (slotAliases.has(cmdName)) {
+    pendingCommandStatistics.delete(message);
+    const data = recordCommandUse(message, cmdKey, false);
+    return completeEconomyCommand(message, () => slot(message, commandParts, data));
   }
   if (levelAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => showLevel(message, commandParts));
@@ -6516,9 +6598,6 @@ async function handleEconomyCommand(message) {
   if (begAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => beg(message));
   }
-  if (slotAliases.has(cmdName)) {
-    return completeEconomyCommand(message, () => slot(message, commandParts));
-  }
   if (rouletteAliases.has(cmdName)) {
     return completeEconomyCommand(message, () => roulette(message, commandParts));
   }
@@ -6528,6 +6607,8 @@ async function handleEconomyCommand(message) {
   if (achievementAliases.has(cmdName)) {
     await checkAndAnnounceAchievements(message);
     await showAchievements(message, commandParts);
+    await flushCommandStatistics(message);
+    await checkAndAnnounceAchievements(message);
     return true;
   }
   if (cooldownAliases.has(cmdName)) {
@@ -6567,10 +6648,10 @@ async function handleEconomyCommand(message) {
 
 function getUserEmbedColor(guildId, userId, member) {
   try {
-    const economyData = loadEconomy();
-    const account = getAccount(economyData, guildId, userId, member);
-    saveEconomy(economyData);
-    return account.settings.embedColor;
+    const account = readEconomyView().guilds?.[guildId]?.users?.[userId];
+    return typeof account?.settings?.embedColor === 'string'
+      ? account.settings.embedColor
+      : defaultEmbedColor(member);
   } catch (error) {
     console.error('[ECONOMY ERROR]: Failed to get user embed color:', error);
     return defaultEmbedColor(member);
@@ -6940,13 +7021,22 @@ function recordExtraRouletteBet(account, bet, won, payout, number) {
   }
 }
 
-function recordCommandUse(message, key) {
+function recordCommandUse(message, key, persist = true) {
   const data = loadEconomy();
   const account = getAccount(data, message.guild.id, message.author.id, message.member);
   incrementAchievementStatistic(account, 'total_commands');
   incrementAchievementStatistic(account, `commands_${key}`);
   if (dayStreak(account, 'active_days')) incrementAchievementStatistic(account, 'active_days');
-  saveEconomy(data);
+  if (persist) saveEconomy(data);
+  else {
+    const xpUsers = xpStore.loadXp();
+    for (const [guildId, guild] of Object.entries(data.guilds)) {
+      if (guildId !== config.guildId) continue;
+      for (const id of Object.keys(guild.users || {})) getAccount(data, guildId, id, undefined, xpUsers);
+    }
+    updateRankRecords(data);
+  }
+  return data;
 }
 
 function updateRankRecords(data, now = Date.now()) {
