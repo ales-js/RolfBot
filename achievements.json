@@ -92,17 +92,22 @@
     "largest_withdrawal",
     "largest_give",
     "largest_transfer_received",
-    "most_expensive_shop_purchase"
+    "most_expensive_shop_purchase",
+    "powerups_used",
+    "xp_2x_powerups_used",
+    "xp_3x_powerups_used",
+    "powerup_hours_purchased",
+    "powerup_money_spent"
   ],
   "difficulties": [
-      {
-        "🔵": "Very Easy",
-        "🟢": "Easy",
-        "🟡": "Moderate",
-        "🟠": "Difficult",
-        "🔴": "Very Difficult",
-        "🟣": "Extremely Difficult"
-      }
+    {
+      "🔵": "Very Easy",
+      "🟢": "Easy",
+      "🟡": "Moderate",
+      "🟠": "Difficult",
+      "🔴": "Very Difficult",
+      "🟣": "Extremely Difficult"
+    }
   ],
   "achievements": [
     {
@@ -198,6 +203,26 @@
       },
       "rewards": {
         "xp": 3500
+      },
+      "enabled": true
+    },
+    {
+      "id": "starthilfe",
+      "name": "Starthilfe",
+      "description": "Use an XP powerup.",
+      "difficulty": "Easy",
+      "badge": "",
+      "show_progress": true,
+      "image_url": "",
+      "hidden": false,
+      "condition": {
+        "type": "statistic",
+        "name": "powerups_used",
+        "target": 1
+      },
+      "rewards": {
+        "money": 1000,
+        "xp": 50
       },
       "enabled": true
     }

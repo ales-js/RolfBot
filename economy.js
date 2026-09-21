@@ -3,6 +3,7 @@ const path = require('path');
 const { randomInt } = require('crypto');
 const xpStore = require('./xp-store');
 const levelRewards = require('./level-rewards');
+const powerups = require('./powerups');
 const activityStore = require('./activity-store');
 const {
   ActionRowBuilder,
@@ -374,7 +375,7 @@ const leaderboardAliases = new Set(['lb', 'leaderboard', 'lboard', 'top']);
 const shopAliases = new Set(['shop', 'store']);
 const achievementAliases = new Set(['achievements', 'achievement', 'ach', 'achs', 'advancements']);
 const statsAliases = new Set(['stats', 'statistics', 'stat']);
-const cooldownAliases = new Set(['cooldowns', 'cooldown', 'cd', 'cds']);
+const cooldownAliases = new Set(['cooldowns', 'cooldown', 'cd', 'cds', 'powerup', 'powerups']);
 const levelAliases = new Set(['level', 'lvl', 'lvls', 'levels', 'xp']);
 
 const adminMoneyAliases = new Map([
@@ -637,7 +638,7 @@ const helpCommandEntries = [
   },
   {
     usage: commandUsage.cooldowns,
-    description: 'See when you can next work, commit a crime, rob, beg, and collect income.',
+    description: 'View command cooldowns, active powerups, and when you can buy another.',
     aliases: cooldownAliases
   },
   {
@@ -911,19 +912,45 @@ function getShopItemsForCategory(shopItems, selectedCat) {
   const items = selectedCat === 'all'
     ? shopItems
     : shopItems.filter(item => item.category === selectedCat);
-  const variants = items.filter(item => customRoleOptions.has(item.id));
-  let added = false;
+  const added = new Set();
   return items.flatMap(item => {
-    if (!customRoleOptions.has(item.id)) return [item];
-    if (added) return [];
-    added = true;
-    return [{ ...item, variants }];
+    const group = customRoleOptions.has(item.id) ? 'custom_roles'
+      : item.powerup?.type === 'xp' ? `xp_${item.powerup.multiplier}` : null;
+    if (!group) return [item];
+    if (added.has(group)) return [];
+    added.add(group);
+    const variants = items.filter(option => group === 'custom_roles'
+      ? customRoleOptions.has(option.id)
+      : option.powerup?.type === 'xp' && option.powerup.multiplier === item.powerup.multiplier);
+    if (group !== 'custom_roles') variants.sort((a, b) => a.powerup.durationHours - b.powerup.durationHours);
+    const entries = [];
+    for (let offset = 0; offset < variants.length; offset += 25) {
+      entries.push({ ...item, variants: variants.slice(offset, offset + 25),
+        powerupGroup: group === 'custom_roles' ? null : `${group}_${offset}` });
+    }
+    return entries;
   });
 }
 
+function getShopPages(shopItems, selectedCat) {
+  const pages = [[]];
+  let componentCount = 1;
+  for (const entry of getShopItemsForCategory(shopItems, selectedCat)) {
+    let page = pages[pages.length - 1];
+    const cost = 1 + (entry.variants ? 1 : 0);
+    if (page.length && (componentCount + 1 + cost > 10 || page.length >= shopConfig.itemsPerPage)) {
+      page = [];
+      pages.push(page);
+      componentCount = 1;
+    }
+    componentCount += (page.length ? 1 : 0) + cost;
+    page.push(entry);
+  }
+  return pages;
+}
+
 function getShopPageCount(shopItems, selectedCat) {
-  const visibleItems = getShopItemsForCategory(shopItems, selectedCat);
-  return Math.max(1, Math.ceil(visibleItems.length / shopConfig.itemsPerPage));
+  return getShopPages(shopItems, selectedCat).length;
 }
 
 function clampShopPage(page, shopItems, selectedCat) {
@@ -957,16 +984,13 @@ function createShopComponents(
   selectedCat = 'all',
   page = 0,
   disableAll = false,
-  selectedCustomRole = 'custom_role_25k'
+  selectedCustomRole = 'custom_role_25k',
+  selectedPowerups = {}
 ) {
   const visibleItems = getShopItemsForCategory(shopItems, selectedCat);
   const totalPages = getShopPageCount(shopItems, selectedCat);
   const currentPage = clampShopPage(page, shopItems, selectedCat);
-  const firstItemIndex = currentPage * shopConfig.itemsPerPage;
-  const pageItems = visibleItems.slice(
-    firstItemIndex,
-    firstItemIndex + shopConfig.itemsPerPage
-  );
+  const pageItems = getShopPages(shopItems, selectedCat)[currentPage];
   const container = new ContainerBuilder()
     .setAccentColor(Number.parseInt(account.settings.embedColor.slice(1), 16))
     .addTextDisplayComponents(
@@ -990,13 +1014,14 @@ function createShopComponents(
   }
   for (const [itemIndex, entry] of pageItems.entries()) {
     const item = entry.variants
-      ? entry.variants.find(option => option.id === selectedCustomRole) || entry.variants[0]
+      ? entry.variants.find(option => option.id === (entry.powerupGroup ? selectedPowerups[entry.powerupGroup] : selectedCustomRole)) || entry.variants[0]
       : entry;
-    const owned = account.ownedItems.includes(item.id);
+    const owned = !item.powerup && account.ownedItems.includes(item.id);
+    const powerupLocked = item.powerup && powerups.blockedUntil(account) > Date.now();
     const priceButton = new ButtonBuilder()
       .setCustomId(`economy_shop_buy:${item.id}`)
-      .setLabel(owned ? 'Owned' : formatMoney(levelRewards.price(account, item)))
-      .setStyle(owned ? ButtonStyle.Secondary : ButtonStyle.Success)
+      .setLabel(owned ? 'Owned' : powerupLocked ? 'Cooldown' : formatMoney(shopPrice(account, item)))
+      .setStyle(owned || powerupLocked ? ButtonStyle.Secondary : ButtonStyle.Success)
       .setDisabled(disableAll || owned);
     if (!owned) {
       priceButton.setEmoji({
@@ -1005,8 +1030,8 @@ function createShopComponents(
       });
     }
     const itemText = [
-      `${item.emoji ? `${item.emoji} ` : ''}**${entry.variants ? 'Custom Role' : item.name}**`,
-      item.description || 'No description provided.'
+      `${item.emoji ? `${item.emoji} ` : ''}**${entry.powerupGroup ? `${item.powerup.multiplier}× XP` : entry.variants ? 'Custom Role' : item.name}**`,
+      item.powerup ? powerups.description(item) : item.description || 'No description.'
     ].join('\n');
     if (itemIndex > 0) {
       container.addSeparatorComponents(
@@ -1020,15 +1045,15 @@ function createShopComponents(
       );
     if (entry.variants) {
       const menu = new StringSelectMenuBuilder()
-        .setCustomId('economy_shop_custom_role')
-        .setPlaceholder('Choose a custom role')
+        .setCustomId(entry.powerupGroup ? `economy_shop_powerup:${entry.powerupGroup}` : 'economy_shop_custom_role')
+        .setPlaceholder(entry.powerupGroup ? 'Choose a duration' : 'Choose a custom role')
         .setDisabled(disableAll)
         .addOptions(entry.variants.map(option => {
-          const ownedOption = account.ownedItems.includes(option.id);
+          const ownedOption = !option.powerup && account.ownedItems.includes(option.id);
           const choice = new StringSelectMenuOptionBuilder()
-            .setLabel(customRoleOptions.get(option.id))
+            .setLabel(entry.powerupGroup ? `${option.powerup.durationHours}h` : customRoleOptions.get(option.id))
             .setValue(option.id)
-            .setDescription(`${formatMoney(levelRewards.price(account, option))} Ostmark${ownedOption ? ' • Owned' : ''}`)
+            .setDescription(`${formatMoney(shopPrice(account, option))} Ostmark${ownedOption ? ' • Owned' : ''}`)
             .setDefault(option.id === item.id);
           if (option.emoji) choice.setEmoji(option.emoji);
           return choice;
@@ -2272,14 +2297,30 @@ function loadShopItems() {
   return loadCachedDefinitions(shopItemsFile, readShopItems);
 }
 
+function shopPrice(account, item) {
+  return item.powerup ? item.price : levelRewards.price(account, item);
+}
+
+let xpPowerupCache = { stamp: null, users: {} };
+function getXpPowerup(guildId, userId) {
+  if (guildId !== config.guildId || !fs.existsSync(economyFile)) return null;
+  const stats = fs.statSync(economyFile);
+  const stamp = `${stats.mtimeMs}:${stats.ctimeMs}:${stats.size}`;
+  if (stamp !== xpPowerupCache.stamp) {
+    const data = JSON.parse(readJsonText(economyFile));
+    xpPowerupCache = { stamp, users: data.guilds?.[guildId]?.users || {} };
+  }
+  return xpPowerupCache.users[userId]?.xpPowerup || null;
+}
+
 function readShopItems() {
   if (!fs.existsSync(shopItemsFile)) {
-    throw new Error('shop_items.json was not found.');
+    throw new Error('err shop_items.json not found');
   }
   const rawData = readJsonText(shopItemsFile);
   const data = rawData.trim() ? JSON.parse(rawData) : {};
   if (!Array.isArray(data.items)) {
-    throw new Error('shop_items.json must contain an "items" array.');
+    throw new Error('err shop_items.json must contain items array');
   }
   const itemIds = new Set();
   const categoryNames = new Map();
@@ -2287,7 +2328,7 @@ function readShopItems() {
     .filter((item) => item?.enabled !== false)
     .map((item) => {
       if (!item || typeof item !== 'object') {
-        throw new Error('Every shop item must be an object.');
+        throw new Error('err shop items must be an object');
       }
       if (
         typeof item.id !== 'string' ||
@@ -2295,7 +2336,7 @@ function readShopItems() {
         item.id.length > 80
       ) {
         throw new Error(
-          'Every shop item needs an ID of 80 characters or fewer using letters, numbers, - or _.'
+          'err shop items need an id of 80 characters or less'
         );
       }
       const normalizedId = item.id.toLowerCase();
@@ -2304,21 +2345,21 @@ function readShopItems() {
       }
       itemIds.add(normalizedId);
       if (typeof item.name !== 'string' || !item.name.trim()) {
-        throw new Error(`Shop item ${item.id} needs a name.`);
+        throw new Error(`err shop item ${item.id} needs a name`);
       }
       if (!Number.isSafeInteger(item.price) || item.price < 0) {
-        throw new Error(`Shop item ${item.id} needs a non-negative whole-number price.`);
+        throw new Error(`err shop item ${item.id} has invalid price`);
       }
       if (
         typeof item.category !== 'string' ||
         !item.category.trim() ||
         item.category.trim().length > 100
       ) {
-        throw new Error(`Shop item ${item.id} needs a category of 100 characters or fewer.`);
+        throw new Error(`err shop item ${item.id} needs a category of 100 characters or less`);
       }
       const categoryKey = item.category.trim().toLowerCase();
       if (categoryKey === 'all') {
-        throw new Error(`Shop item ${item.id} cannot use "All" as its category.`);
+        throw new Error(`shop item ${item.id} can't use "All" as category.`);
       }
       if (!categoryNames.has(categoryKey)) {
         categoryNames.set(categoryKey, item.category.trim());
@@ -2329,7 +2370,8 @@ function readShopItems() {
         description: typeof item.description === 'string' ? item.description.trim() : '',
         price: item.price,
         emoji: typeof item.emoji === 'string' ? item.emoji.trim() : '',
-        category: categoryNames.get(categoryKey)
+        category: categoryNames.get(categoryKey),
+        powerup: powerups.definition(item)
       };
     });
   const categories = getShopCategories(shopItems);
@@ -2343,19 +2385,19 @@ function readShopItems() {
 
 function loadAchievements() {
   if (!fs.existsSync(achievementsFile)) {
-    throw new Error('achievements.json was not found.');
+    throw new Error('achievements.json not found');
   }
   return loadCachedDefinitions(achievementsFile, readAchievements);
 }
 
 function readAchievements() {
   if (!fs.existsSync(achievementsFile)) {
-    throw new Error('achievements.json was not found.');
+    throw new Error('achievements.json not found');
   }
   const rawData = readJsonText(achievementsFile);
   const data = rawData.trim() ? JSON.parse(rawData) : {};
   if (!Array.isArray(data.achievements)) {
-    throw new Error('achievements.json must contain an "achievements" array.');
+    throw new Error('achievements.json must contain achievements array');
   }
   const difficultyEmojis = new Map();
   const difficultyMappings = Array.isArray(data.difficulties)
@@ -3740,6 +3782,12 @@ async function backfillLevelRewards(guild) {
   if (guild.id !== config.guildId) return;
   const members = await guild.members.fetch();
   const data = loadEconomy();
+  const powerupAchievement = loadAchievements().filter(item => item.id === 'starthilfe');
+  let powerupUnlocks = 0;
+  for (const [userId] of Object.entries(data.guilds[guild.id]?.users || {})) {
+    const account = getAccount(data, guild.id, userId, members.get(userId));
+    powerupUnlocks += unlockAchievements(powerupAchievement, account).length;
+  }
   let count = 0;
   for (const member of members.values()) {
     if (member.user.bot) continue;
@@ -3748,6 +3796,7 @@ async function backfillLevelRewards(guild) {
   }
   saveEconomy(data);
   console.log(`[LEVEL REWARDS]: synced rewards for ${count} members`);
+  console.log(`[POWERUPS]: stats backfilled: unlocked Starthilfe for ${powerupUnlocks} users.`);
   if (guild.id !== config.guildId) return;
   for (const member of members.values()) {
     if (member.user.bot) continue;
@@ -3939,6 +3988,7 @@ function getCooldownFields(account, member, now = Date.now()) {
       ? cooldownText.readyIncome(availableRoles.length, incomeRoles.length)
       : cooldownText.availableAt(Math.ceil(getNextDailyIncomeReset(now) / 1000));
   fields.push({ name: '?collect', value: collectStatus, inline: false });
+  fields.push(...powerups.fields(account, now));
   return fields;
 }
 
@@ -5299,8 +5349,9 @@ async function showShop(message, args) {
     let selectedCat = 'all';
     let selectedPage = 0;
     let selectedCustomRole = 'custom_role_25k';
+    const selectedPowerups = {};
     const renderShop = (currentAccount, items, category, page, disabled = false) =>
-      createShopComponents(currentAccount, items, category, page, disabled, selectedCustomRole);
+      createShopComponents(currentAccount, items, category, page, disabled, selectedCustomRole, selectedPowerups);
     saveEconomy(economyData);
     const components = renderShop(account, shopItems, selectedCat, selectedPage);
     const shopMessage = await message.reply({
@@ -5320,6 +5371,22 @@ async function showShop(message, args) {
               parse: []
             }
           });
+          return;
+        }
+        if (interaction.customId.startsWith('economy_shop_powerup:')) {
+          const group = interaction.customId.slice('economy_shop_powerup:'.length);
+          const selectedId = interaction.values[0];
+          const items = loadShopItems();
+          const entry = getShopItemsForCategory(items, selectedCat).find(item => item.powerupGroup === group);
+          if (!entry?.variants.some(option => option.id === selectedId)) {
+            await interaction.reply({ content: 'That powerup duration is no longer available.', flags: MessageFlags.Ephemeral });
+            return;
+          }
+          selectedPowerups[group] = selectedId;
+          const data = loadEconomy();
+          const currentAccount = getAccount(data, message.guild.id, message.author.id, message.member);
+          Object.assign(account, currentAccount);
+          await interaction.update({ components: renderShop(currentAccount, items, selectedCat, selectedPage) });
           return;
         }
         if (interaction.customId === 'economy_shop_custom_role') {
@@ -5355,6 +5422,8 @@ async function showShop(message, args) {
           account.wallet = categoryAccount.wallet;
           account.ownedItems = [...categoryAccount.ownedItems];
           account.levelBonuses = categoryAccount.levelBonuses;
+          account.xpPowerup = categoryAccount.xpPowerup;
+          account.xpPowerupAvailableAt = categoryAccount.xpPowerupAvailableAt;
           await interaction.update({
             components: renderShop(
               categoryAccount,
@@ -5404,6 +5473,8 @@ async function showShop(message, args) {
           account.wallet = pageAccount.wallet;
           account.ownedItems = [...pageAccount.ownedItems];
           account.levelBonuses = pageAccount.levelBonuses;
+          account.xpPowerup = pageAccount.xpPowerup;
+          account.xpPowerupAvailableAt = pageAccount.xpPowerupAvailableAt;
           await modalInteraction.update({
             components: renderShop(
               pageAccount,
@@ -5442,6 +5513,8 @@ async function showShop(message, args) {
           account.wallet = pageAccount.wallet;
           account.ownedItems = [...pageAccount.ownedItems];
           account.levelBonuses = pageAccount.levelBonuses;
+          account.xpPowerup = pageAccount.xpPowerup;
+          account.xpPowerupAvailableAt = pageAccount.xpPowerupAvailableAt;
           await interaction.update({
             components: renderShop(
               pageAccount,
@@ -5480,7 +5553,7 @@ async function showShop(message, args) {
         );
         const updatedShopItems = loadShopItems();
         const baseItem = updatedShopItems.find((shopItem) => shopItem.id === requestedItemId);
-        const item = baseItem && { ...baseItem, price: levelRewards.price(updatedAccount, baseItem) };
+        const item = baseItem && { ...baseItem, price: shopPrice(updatedAccount, baseItem) };
         if (!item) {
           await interaction.reply({
             content: 'That shop item is no longer available.',
@@ -5488,7 +5561,14 @@ async function showShop(message, args) {
           });
           return;
         }
-        if (updatedAccount.ownedItems.includes(item.id)) {
+        if (item.powerup) {
+          const blocked = powerups.blockedMessage(updatedAccount);
+          if (blocked) {
+            await interaction.reply({ content: blocked, flags: MessageFlags.Ephemeral });
+            return;
+          }
+        }
+        if (!item.powerup && updatedAccount.ownedItems.includes(item.id)) {
           const alreadyOwnedEmbed = economyEmbeds.shopAlreadyOwned(message, item);
           await interaction.reply({
             embeds: [alreadyOwnedEmbed]
@@ -5508,7 +5588,8 @@ async function showShop(message, args) {
           return;
         }
         updatedAccount.wallet -= item.price;
-        updatedAccount.ownedItems.push(item.id);
+        if (item.powerup) powerups.activate(updatedAccount, item);
+        else updatedAccount.ownedItems.push(item.id);
         if (customEmoji) {
           updatedAccount.customBadgeEmoji = customEmoji;
           updatedAccount.customBadgePurchaseId = interaction.id;
@@ -5516,7 +5597,7 @@ async function showShop(message, args) {
         }
         saveEconomy(updatedEconomyData);
         try {
-          if (item.id !== 'custom_badge') await grantShopItemRole(message, item);
+          if (!item.powerup && item.id !== 'custom_badge') await grantShopItemRole(message, item);
         } catch (error) {
           const refundData = loadEconomy();
           const refundAccount = getAccount(refundData, message.guild.id, message.author.id, message.member);
@@ -5539,6 +5620,8 @@ async function showShop(message, args) {
         account.wallet = updatedAccount.wallet;
         account.ownedItems = [...updatedAccount.ownedItems];
         account.levelBonuses = updatedAccount.levelBonuses;
+        account.xpPowerup = updatedAccount.xpPowerup;
+        account.xpPowerupAvailableAt = updatedAccount.xpPowerupAvailableAt;
         await interaction.update({
           components: renderShop(
             updatedAccount,
@@ -5548,6 +5631,7 @@ async function showShop(message, args) {
           )
         });
         const purchaseEmbed = economyEmbeds.shopPurchaseSuccess(message, updatedAccount, item);
+        if (item.powerup) purchaseEmbed.addFields(...powerups.fields(updatedAccount));
         await interaction.followUp({
           embeds: [purchaseEmbed]
         });
@@ -6531,6 +6615,11 @@ function readActivityStat(account, key) {
 }
 
 function initExtraStats() {
+  addStat('powerups_used', 'Powerups used');
+  addStat('xp_2x_powerups_used', '2x XP powerups used');
+  addStat('xp_3x_powerups_used', '3x XP powerups used');
+  addStat('powerup_hours_purchased', 'Powerup hours purchased');
+  addStat('powerup_money_spent', 'Money spent on powerups', 'money');
   addStat('messages_sent', 'Messages sent', 'count', account => readActivityStat(account, 'messages_sent'));
   addStat('vc_time', 'Time spent in VC', 'duration', account => readActivityStat(account, 'vc_time'));
   const count = (key, label) => addStat(key, label);
@@ -6729,6 +6818,37 @@ function mapStat(account, map, id, uniqueKey, maximumKey) {
   if (maximumKey) setMaximumAchievementStatistic(account, maximumKey, values[id]);
 }
 
+function syncPowerupStats(account) {
+  const stats = account.achievementStats;
+  const definitions = new Map(loadShopItems().filter(item => item.powerup?.type === 'xp')
+    .map(item => [item.id, item.powerup]));
+  for (const key of Object.keys(stats)) {
+    const match = /^shop_item_(xp_([23])x_(\d+)h)_[a-f0-9]{10}_purchases$/.exec(key);
+    if (match && key === `shop_item_${statId(match[1])}_purchases` && !definitions.has(match[1])) {
+      definitions.set(match[1], { multiplier: Number(match[2]), durationHours: Number(match[3]) });
+    }
+  }
+  const last = account.xpPowerup;
+  if (last?.itemId && [2, 3].includes(last.multiplier) && !definitions.has(last.itemId)) {
+    definitions.set(last.itemId, { multiplier: last.multiplier,
+      durationHours: Math.max(0, (last.expiresAt - last.startedAt) / 3600000) });
+  }
+  let total = 0, two = 0, three = 0, hours = 0;
+  for (const [id, p] of definitions) {
+    let count = Math.max(0, Math.floor(statNum(account, `shop_item_${statId(id)}_purchases`)));
+    if (last?.itemId === id) count = Math.max(count, 1);
+    total += count;
+    if (p.multiplier === 2) two += count;
+    if (p.multiplier === 3) three += count;
+    hours += count * p.durationHours;
+  }
+  stats.powerups_used = total;
+  stats.xp_2x_powerups_used = two;
+  stats.xp_3x_powerups_used = three;
+  stats.powerup_hours_purchased = hours;
+  stats.powerup_money_spent = statNum(account, `shop_category_${statId('Powerups')}_spent`);
+}
+
 function syncExtraStats(account, member, now = Date.now()) {
   const meta = statsMeta(account, now);
   const stats = account.achievementStats;
@@ -6757,6 +6877,7 @@ function syncExtraStats(account, member, now = Date.now()) {
   for (const [key, def] of extraStats) {
     if (def.calc) stats[key] = def.calc(account);
   }
+  syncPowerupStats(account);
   for (const [key, value] of Object.entries(account.statOverrides || {})) stats[key] = value;
 }
 
@@ -6897,6 +7018,7 @@ registerRankStats();
 
 
 module.exports = {
+  getXpPowerup,
   syncLevelRewards,
   backfillLevelRewards,
   handleEconomyCommand,

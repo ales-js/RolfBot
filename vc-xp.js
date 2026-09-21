@@ -13,12 +13,16 @@ function getRate(state) {
   return 180;
 }
 
-function createTracker() {
+function createTracker(getPowerup = () => null) {
   const users = new Map();
 
   function settle(now) {
     for (const user of users.values()) {
-      user.credit += Math.max(0, now - user.last) * user.rate;
+      const elapsed = Math.max(0, now - user.last);
+      const powerup = getPowerup(user.member);
+      const boostedMs = powerup ? Math.max(0,
+        Math.min(now, powerup.expiresAt) - Math.max(user.last, powerup.startedAt)) : 0;
+      user.credit += (elapsed + boostedMs * ((powerup?.multiplier || 1) - 1)) * user.rate;
       user.last = now;
     }
   }
@@ -57,11 +61,11 @@ function createTracker() {
   return { refresh, take };
 }
 
-function start(client, { guildId, award, onError = console.error }) {
-  const tracker = createTracker();
+function start(client, { guildId, award, getPowerup = () => null, onError = console.error }) {
+  const tracker = createTracker(getPowerup);
   let busy = false;
   let connected = true;
-  const now = () => performance.now();
+  const now = () => Date.now();
   const guild = () => client.guilds.cache.get(guildId);
   const refresh = () => {
     const current = guild();

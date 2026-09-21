@@ -80,6 +80,96 @@
       "emoji": "🌟",
       "category": "Custom Roles",
       "enabled": true
+    },
+    {
+      "id": "xp_2x_1h",
+      "name": "2x XP (1h)",
+      "description": "Boosts message and VC XP. Starts as soon as you buy it.",
+      "price": 5000,
+      "emoji": "⚡",
+      "category": "Powerups",
+      "enabled": true,
+      "powerup": {
+        "type": "xp",
+        "multiplier": 2,
+        "durationHours": 1,
+        "purchaseCooldownHours": 24
+      }
+    },
+    {
+      "id": "xp_2x_3h",
+      "name": "2x XP (3h)",
+      "description": "Boosts message and VC XP. Starts as soon as you buy it.",
+      "price": 12000,
+      "emoji": "⚡",
+      "category": "Powerups",
+      "enabled": true,
+      "powerup": {
+        "type": "xp",
+        "multiplier": 2,
+        "durationHours": 3,
+        "purchaseCooldownHours": 24
+      }
+    },
+    {
+      "id": "xp_2x_6h",
+      "name": "2x XP (6h)",
+      "description": "Boosts message and VC XP. Starts as soon as you buy it.",
+      "price": 25000,
+      "emoji": "⚡",
+      "category": "Powerups",
+      "enabled": true,
+      "powerup": {
+        "type": "xp",
+        "multiplier": 2,
+        "durationHours": 6,
+        "purchaseCooldownHours": 24
+      }
+    },
+    {
+      "id": "xp_3x_1h",
+      "name": "3x XP (1h)",
+      "description": "Boosts message and VC XP. Starts as soon as you buy it.",
+      "price": 8000,
+      "emoji": "🚀",
+      "category": "Powerups",
+      "enabled": true,
+      "powerup": {
+        "type": "xp",
+        "multiplier": 3,
+        "durationHours": 1,
+        "purchaseCooldownHours": 72
+      }
+    },
+    {
+      "id": "xp_3x_3h",
+      "name": "3x XP (3h)",
+      "description": "Boosts message and VC XP. Starts as soon as you buy it.",
+      "price": 24000,
+      "emoji": "🚀",
+      "category": "Powerups",
+      "enabled": true,
+      "powerup": {
+        "type": "xp",
+        "multiplier": 3,
+        "durationHours": 3,
+        "purchaseCooldownHours": 72
+      }
+    },
+    {
+      "id": "xp_3x_6h",
+      "name": "3x XP (6h)",
+      "description": "Boosts message and VC XP. Starts as soon as you buy it.",
+      "price": 50000,
+      "emoji": "🚀",
+      "category": "Powerups",
+      "enabled": true,
+      "powerup": {
+        "type": "xp",
+        "multiplier": 3,
+        "durationHours": 6,
+        "purchaseCooldownHours": 72
+      }
     }
   ]
 }

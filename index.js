@@ -17,6 +17,7 @@ const {
 
 const {
   handleEconomyCommand,
+  getXpPowerup,
   syncLevelRewards,
   backfillLevelRewards,
   getUserEmbedColor
@@ -89,7 +90,7 @@ rest
   )
   .then(() => console.log('[STARTUP INFO]: starting...'))
   .catch(error => {
-    console.error('[STARTUP ERROR]: Failed to register commands:', error);
+    console.error('[STARTUP ERROR]: failed to register commands:', error);
   });
 
 const rotatingStatuses = [
@@ -153,6 +154,7 @@ client.once('ready', readyClient => {
   }
   voiceXp.start(readyClient, {
     guildId: config.guildId,
+    getPowerup: member => getXpPowerup(member.guild.id, member.id),
     award: (member, xp) => awardXp(member.guild, member.user, member, xp, null, true)
   });
   for (const guild of readyClient.guilds.cache.values()) {
@@ -402,9 +404,9 @@ async function checkOldXp(readyClient) {
     }
     console.log(`[OLD XP]: finished! +${addedXp} XP from ${addedMessages} old messages. ${completed} channels completed, ${alreadyDone} already done, ${errors} access/discovery errors.`);
     if (errors) console.log('[OLD XP]: some history could not be read. fix access if needed, then run check oldxp again.');
-    console.log('[OLD XP]: use check lvlrole1 to update level roles. level rewards sync on the next message, VC XP payout or restart.');
+    console.log('[OLD XP]: use check lvlrole1 to update level roles. level rewards sync on the next message, vc xp payout or restart.');
   } catch (error) {
-    console.error('[OLD XP]: scan stopped; saved batches are kept. run check oldxp again to resume:', error);
+    console.error('[OLD XP]: scan stopped. run check oldxp again to resume:', error);
   } finally {
     checkingOldXp = false;
   }
@@ -425,7 +427,7 @@ client.on('interactionCreate', async interaction => {
         await interaction.respond([]);
       }
     } catch (error) {
-      console.error('[SERVER ACCESS]: Failed to reply to blocked interaction:', error.message);
+      console.error('[SERVER ACCESS]: failed to reply to blocked interaction:', error.message);
     }
     return;
   }
@@ -647,7 +649,10 @@ function awardXp(guild, user, member, amount, channel, fromVc = false) {
   const previous = xpJobs.get(user.id) || Promise.resolve();
   const job = previous.catch(() => {}).then(async () => {
     const userId = user.id;
-    const result = xpStore.addXp(userId, amount);
+    const powerup = !fromVc && getXpPowerup(guild.id, userId);
+    const now = Date.now();
+    const multiplier = powerup && powerup.startedAt <= now && powerup.expiresAt > now ? powerup.multiplier : 1;
+    const result = xpStore.addXp(userId, amount * multiplier);
     try {
       await syncLevelRewards(guild.id, userId, member);
     } catch (error) {
@@ -731,7 +736,7 @@ client.on('messageCreate', async message => {
   try {
     activityStore.recordMessage(message);
   } catch (error) {
-    console.error('[ACTIVITY ERROR]: Failed to count message:', error);
+    console.error('[ACTIVITY ERROR]: failed to count message:', error);
   }
 
   try {
@@ -744,7 +749,7 @@ client.on('messageCreate', async message => {
     const baseXpAdd = Math.floor(Math.random() * 10) + 5;
     await awardXp(message.guild, message.author, message.member, baseXpAdd, message.channel);
   } catch (error) {
-    console.error('[XP ERROR]: Failed to award message XP or send level-up:', error);
+    console.error('[XP ERROR]: failed to award message XP or send level-up:', error);
   }
 });
 
