@@ -772,7 +772,7 @@ client.on('messageCreate', async message => {
   }
 
   try {
-    const baseXpAdd = Math.floor(Math.random() * 10) + 5;
+    const baseXpAdd = xpStore.randomMessageXp();
     await awardXp(message.guild, message.author, message.member, baseXpAdd, message.channel);
   } catch (error) {
     console.error('[XP ERROR]: failed to award message XP or send level-up:', error);

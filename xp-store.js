@@ -5,6 +5,13 @@ const { randomUUID } = require('crypto');
 const xpFile = path.join(__dirname, 'xp.json');
 const xpFormat = 'rolfbot-total-xp-v1';
 
+const messageXp = { minimum: 5, maximum: 14 };
+
+function randomMessageXp() {
+  return Math.floor(Math.random() * (messageXp.maximum - messageXp.minimum + 1))
+    + messageXp.minimum;
+}
+
 function requireWholeNumber(value, minimum, name) {
   if (!Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`${name} must be a safe whole number of at least ${minimum}.`);
@@ -220,7 +227,7 @@ function applyOldXpBatch(guildId, channelId, before, messages) {
     seen.add(message.id);
     if (BigInt(message.id) < BigInt(next)) next = message.id;
     if (message.createdTimestamp >= scan.cutoff || !message.author || message.author.bot) continue;
-    const xp = Math.floor(Math.random() * 10) + 5;
+    const xp = randomMessageXp();
     addXpToData(users, message.author.id, xp);
     count++;
     amount += xp;
@@ -238,5 +245,5 @@ function applyOldXpBatch(guildId, channelId, before, messages) {
 module.exports = {
   loadXp, saveXp, xpAtLevel, levelFromXp, getProgress, getUserProgress,
   addXpToData, addXp, setTotalXp, setLevel, resetLevel,
-  beginOldXp, applyOldXpBatch
+  beginOldXp, applyOldXpBatch, messageXp, randomMessageXp,
 };

@@ -1,16 +1,28 @@
 const { ChannelType } = require('discord.js');
 
 const interval = 5 * 60 * 1000;
+const minimumHumans = 2;
+
+const rates = {
+  mutedAndDeafened: 0,
+  stageAudience: 90,
+  camera: 300,
+  streaming: 240,
+  muted: 120,
+  normal: 180
+};
 
 function getRate(state) {
   const muted = state.selfMute || state.serverMute;
   const deafened = state.selfDeaf || state.serverDeaf;
-  if (muted && deafened) return 0;
-  if (state.channel?.type === ChannelType.GuildStageVoice && state.suppress === true) return 90;
-  if (state.selfVideo) return 300;
-  if (state.streaming) return 240;
-  if (muted) return 120;
-  return 180;
+  if (muted && deafened) return rates.mutedAndDeafened;
+  if (state.channel?.type === ChannelType.GuildStageVoice && state.suppress === true) {
+    return rates.stageAudience;
+  }
+  if (state.selfVideo) return rates.camera;
+  if (state.streaming) return rates.streaming;
+  if (muted) return rates.muted;
+  return rates.normal;
 }
 
 function createTracker(getPowerup = () => null) {
@@ -40,7 +52,10 @@ function createTracker(getPowerup = () => null) {
         users.set(state.id, user);
       }
       user.member = state.member;
-      user.rate = counts.get(state.channelId) >= 2 && state.channelId !== state.guild?.afkChannelId ? getRate(state) : 0;
+      user.rate = counts.get(state.channelId) >= minimumHumans
+        && state.channelId !== state.guild?.afkChannelId
+        ? getRate(state)
+        : 0;
     }
   }
 
@@ -120,4 +135,4 @@ function start(client, { guildId, award, getPowerup = () => null, onError = cons
   return timer;
 }
 
-module.exports = { getRate, createTracker, start };
+module.exports = { interval, minimumHumans, rates, getRate, createTracker, start };

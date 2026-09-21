@@ -50,6 +50,7 @@ const pendingCommandStatistics = new WeakMap();
 const cleanupClients = new WeakSet();
 const cleanupRunning = new Set();
 const cleanupIntervalMs = 60 * 60 * 1000;
+const voiceXp = require('./vc-xp');
 
 const workConfig = {
   minimumPay: 250,
@@ -478,7 +479,7 @@ const commandUsage = {
   achievements: '`?achievements`',
   stats: '`?stats`',
   cooldowns: '`?cooldowns`',
-  level: '`?level [ rewards ]`',
+  level: '`?level [ rewards | info ]`',
   settings: '`?settings [ badges | color ]`',
   color: '`?color [ reset | #HEXHEX ]`',
   colorHex: '`?color #HEXHEX`',
@@ -543,7 +544,7 @@ const adminMessages = {
 const helpCommandEntries = [
   {
     usage: commandUsage.level,
-    description: 'View your level and XP, or use ?level rewards to see all level rewards.',
+    description: 'View your level and XP, or use `?level rewards` to see all level rewards and `?level info` to see all ways to get XP.',
     aliases: levelAliases
   },
   {
@@ -3949,12 +3950,82 @@ function getLevelEmbed(guildId, user, member) {
   );
 }
 
+function getLevelInfoEmbed(message) {
+  const { minimum, maximum } = xpStore.messageXp;
+  const { rates, interval, minimumHumans } = voiceXp;
+  const number = value => value.toLocaleString('en-US');
+
+  const achievementXp = loadAchievements()
+    .map(achievement => achievement.rewards.xp)
+    .filter(xp => xp > 0);
+
+  const multipliers = [...new Set(
+    loadShopItems()
+      .filter(item => item.enabled !== false && item.powerup?.type === 'xp')
+      .map(item => item.powerup.multiplier)
+  )].sort((a, b) => a - b);
+
+  const achievementText = achievementXp.length
+    ? `Earn **${number(Math.min(...achievementXp))}–${number(Math.max(...achievementXp))} XP** from achievements that reward XP.\nCheck \`?achievements\` to see how to get them and their exact rewards.`
+    : 'there are no XP achievements.';
+
+  return createEconomyEmbed(
+    message,
+    getUserEmbedColor(message.guild.id, message.author.id, message.member)
+  )
+    .setTitle('Ways to get XP')
+    .addFields(
+      {
+        name: 'Messages',
+        value: [
+          `**${number(minimum)}–${number(maximum)} XP** per message.`,
+          'there is no XP message cooldown.'
+        ].join('\n')
+      },
+      {
+        name: `Voice Chat`,
+        value: [
+          `- Normal: **${number(rates.normal)} XP/${number(interval / 60000)}m**`,
+          `- Muted: **${number(rates.muted)} XP/${number(interval / 60000)}m**`,
+          `- Screensharing: **${number(rates.streaming)} XP/${number(interval / 60000)}m**`,
+          `- Camera on: **${number(rates.camera)} XP/${number(interval / 60000)}m**`,
+          `- Stage audience: **${number(rates.stageAudience)} XP/${number(interval / 60000)}m**`,
+          `- Muted + deafened: **${number(rates.mutedAndDeafened)} XP/${number(interval / 60000)}m**`,
+          '',
+          `You need at least **${minimumHumans} non-bot members** in the channel. https://discord.com/channels/1531931159326625802/1532120334139002900 doesn't count.`
+        ].join('\n')
+      },
+      {
+        name: 'Achievements',
+        value: achievementText
+      },
+      {
+        name: 'XP Powerups',
+        value: [
+          multipliers.length
+            ? `Buy **${multipliers.map(value => `${value}x`).join(' / ')} XP** powerups in \`?shop\` to boost message and VC XP.`
+            : 'Check `?shop` for XP powerup availability.',
+          'XP Powerups activate immediately and don’t stack. achievement XP is not boosted.'
+        ].join('\n')
+      }
+    )
+    .setTimestamp();
+}
+
 async function showLevel(message, args = []) {
   try {
-    if (args.length === 1 && args[0].toLowerCase() === 'rewards') return showLevelRewards(message);
+    if (args.length === 1 && args[0].toLowerCase() === 'rewards') {
+      return showLevelRewards(message);
+    }
+
+    if (args.length === 1 && args[0].toLowerCase() === 'info') {
+      return message.reply({ embeds: [getLevelInfoEmbed(message)] });
+    }
+
     const embed = args.length > 0
       ? economyEmbeds.levelInvalidUsage(message)
       : getLevelEmbed(message.guild.id, message.author, message.member);
+
     return message.reply({ embeds: [embed] });
   } catch (error) {
     console.error('[XP ERROR]: Failed to show level:', error);
