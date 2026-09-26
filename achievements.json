@@ -188,6 +188,25 @@
       "enabled": true
     },
     {
+      "id": "the_bourgeoisie",
+      "name": "The Bourgeoisie",
+      "description": "Obtain 10,000,000<:DDR_mark:1532733538565226546>.",
+      "difficulty": "Extremely Difficult",
+      "badge": "💰",
+      "show_progress": true,
+      "image_url": "",
+      "hidden": false,
+      "condition": {
+        "type": "total_money",
+        "target": 10000000
+      },
+      "rewards": {
+        "money": 1000000,
+        "xp": 100000
+      },
+      "enabled": true
+    },
+    {
       "id": "dauersender",
       "name": "Dauersender",
       "description": "Spend 10 hours total in VC. counted in seconds.",
