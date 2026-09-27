@@ -3050,6 +3050,34 @@ function getLeaderboardEntries(data, guildId, category) {
   );
 }
 
+function parseMoneyAmount(input) {
+  if (typeof input !== 'string') return null;
+  const normalized = input.toLowerCase().replace(/,/g, '').trim();
+  const match = normalized.match(/^(\d+)(?:\.(\d+))?(k|m|b|t|thousand|million|billion|trillion)?$/);
+  if (!match) return null;
+  const multipliers = {
+    '': 1n,
+    k: 1_000n,
+    thousand: 1_000n,
+    m: 1_000_000n,
+    million: 1_000_000n,
+    b: 1_000_000_000n,
+    billion: 1_000_000_000n,
+    t: 1_000_000_000_000n,
+    trillion: 1_000_000_000_000n
+  };
+  const whole = BigInt(match[1]);
+  const decimals = match[2] || '';
+  const multiplier = multipliers[match[3] || ''];
+  const divisor = 10n ** BigInt(decimals.length);
+  const decimalValue = decimals ? BigInt(decimals) : 0n;
+  const scaled = (whole * divisor + decimalValue) * multiplier;
+  if (scaled % divisor !== 0n) return null;
+  const value = scaled / divisor;
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(value);
+}
+
 function formatMoney(amount) {
   return moneyFormatter.format(Math.floor(amount));
 }
@@ -5036,13 +5064,13 @@ async function deposit(message, args) {
     } else if (requestedAmount === 'quarter') {
       amount = Math.floor(account.wallet / 4);
     } else {
-      if (!/^\d+$/.test(requestedAmount)) {
+      amount = parseMoneyAmount(requestedAmount);
+      if (amount === null) {
         const embed = economyEmbeds.depositInvalidAmount(message, requestedAmount);
         return message.reply({
           embeds: [embed]
         });
       }
-      amount = Number(requestedAmount);
     }
     if (!Number.isSafeInteger(amount)) {
       const embed = economyEmbeds.depositInvalidWholeNumber(message);
@@ -5112,13 +5140,13 @@ async function withdraw(message, args) {
     } else if (requestedAmount === 'quarter') {
       amount = Math.floor(account.bank / 4);
     } else {
-      if (!/^\d+$/.test(requestedAmount)) {
+      amount = parseMoneyAmount(requestedAmount);
+      if (amount === null) {
         const embed = economyEmbeds.withdrawInvalidAmount(message, requestedAmount);
         return message.reply({
           embeds: [embed]
         });
       }
-      amount = Number(requestedAmount);
     }
     if (!Number.isSafeInteger(amount)) {
       const embed = economyEmbeds.withdrawInvalidWholeNumber(message);
@@ -5172,7 +5200,8 @@ async function giveMoney(message, args) {
     const requestedAmount = args.at(-1).toLowerCase();
     const targetArguments = args.slice(0, -1);
     const namedAmounts = new Set(['all', 'half', 'quarter']);
-    if (!namedAmounts.has(requestedAmount) && !/^\d+$/.test(requestedAmount)) {
+    const parsedAmount = namedAmounts.has(requestedAmount) ? null : parseMoneyAmount(requestedAmount);
+    if (!namedAmounts.has(requestedAmount) && parsedAmount === null) {
       const embed = economyEmbeds.giveInvalidAmount(message, requestedAmount);
       return message.reply({
         embeds: [embed]
@@ -5218,7 +5247,7 @@ async function giveMoney(message, args) {
     } else if (requestedAmount === 'quarter') {
       amount = Math.floor(account.wallet / 4);
     } else {
-      amount = Number(requestedAmount);
+      amount = parsedAmount;
     }
     if (!Number.isSafeInteger(amount)) {
       const embed = economyEmbeds.giveInvalidWholeNumber(message);
@@ -5285,15 +5314,14 @@ async function slot(message, args, commandData) {
     } else if (requestedAmount === 'quarter') {
       amount = Math.floor(account.wallet / 4);
     } else {
-      const amountWithoutCommas = requestedAmount.replace(/,/g, '');
-      if (!/^\d+$/.test(amountWithoutCommas)) {
+      amount = parseMoneyAmount(requestedAmount);
+      if (amount === null) {
         const embed = economyEmbeds.slotInvalidAmount(message, requestedAmount);
         saveEconomy(economyData);
         return message.reply({
           embeds: [embed]
         });
       }
-      amount = Number(amountWithoutCommas);
     }
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       const embed = economyEmbeds.slotInvalidWholeNumber(message);
@@ -5366,14 +5394,13 @@ async function roulette(message, args) {
     } else if (requestedAmount === 'quarter') {
       amount = Math.floor(account.wallet / 4);
     } else {
-      const amountWithoutCommas = requestedAmount.replace(/,/g, '');
-      if (!/^\d+$/.test(amountWithoutCommas)) {
+      amount = parseMoneyAmount(requestedAmount);
+      if (amount === null) {
         const embed = economyEmbeds.rouletteInvalidAmount(message, requestedAmount);
         return message.reply({
           embeds: [embed]
         });
       }
-      amount = Number(amountWithoutCommas);
     }
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       const embed = economyEmbeds.rouletteInvalidWholeNumber(message);
