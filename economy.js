@@ -212,10 +212,10 @@ const income1000RoleId = '1533228759262560256';
 const slotsLuckItemId = 'gluecksgenosse';
 const slotsLuckRoleId = '1550504236968583218';
 const slotsLuckBoost = {
-  Bronze: 10,
-  Silver: 5,
-  Gold: 3,
-  Platinum: 1.5
+  Bronze: 8,
+  Silver: 3,
+  Gold: 2,
+  Platinum: 0.5
 };
 
 const rouletteLuckItemId = 'rouletterolf';
@@ -242,25 +242,25 @@ const slotConfig = {
       name: 'Bronze',
       emoji: '<:RolfBot_berliner_bronze:1546195312920760410>',
       multiplier: 1.25,
-      chance: 28
+      chance: 16
     },
     {
       name: 'Silver',
       emoji: '<:RolfBot_berliner_silver:1546194641089724557>',
       multiplier: 1.5,
-      chance: 18
+      chance: 6
     },
     {
       name: 'Gold',
       emoji: '<:RolfBot_berliner_gold:1546194660983181352>',
       multiplier: 2,
-      chance: 10
+      chance: 4
     },
     {
       name: 'Platinum',
       emoji: '<:RolfBot_berliner_platinum:1546195287805005844>',
       multiplier: 3,
-      chance: 4
+      chance: 1
     }
   ]
 };
@@ -364,6 +364,7 @@ const colorRoleIds = [
 
 const creditsAliases = new Set(['credits']);
 const helpAliases = new Set(['help', 'commands', 'command', 'cmd', 'cmds', 'h']);
+const exchangeAliases = new Set(['exchange']);
 const balanceAliases = new Set(['bal', 'balance', 'money', 'cash', 'wallet', 'bank', 'b']);
 const depositAliases = new Set(['dep', 'deposit', 'transfer', 'd']);
 const withdrawAliases = new Set(['withdraw', 'with', 'w']);
@@ -434,6 +435,7 @@ const badgeAliases = new Set(['badges']);
 const colorAliases = new Set(['color', 'colour']);
 
 const commandAliasGroups = new Map([
+  ['exchange', exchangeAliases],
   ['balance', balanceAliases],
   ['leaderboard', leaderboardAliases],
   ['work', workAliases],
@@ -458,12 +460,36 @@ const commandAliasGroups = new Map([
   ['help', helpAliases]
 ]);
 
-const currencyEmoji = '<:DDR_mark:1532733538565226546>';
-const currencyEmojiId = '1532733538565226546';
+const oldCurrencyEmoji = '<:AltOstmark:1554122798048477255>';
+const currencyEmoji = '<:NeuOstmark:1554122880055255121>';
+const currencyEmojiId = '1554122880055255121';
+const currencyReformVersion = 1;
+const exchangeBrackets = [
+  { ceiling: 100000n, divisor: 1n },
+  { ceiling: 1000000n, divisor: 10n },
+  { ceiling: 1000000000n, divisor: 1000n },
+  { ceiling: 1000000000000n, divisor: 1000000n },
+  { ceiling: null, divisor: 1000000000n }
+];
+const hyperinflationBadge = {
+  id: 'Hyperinflator',
+  name: 'Hyperinflator',
+  badge: '📉',
+  type: 'commemorative',
+  obtainable: false,
+  description: 'Being one of the richest during the RolfBot Hyperinflation of 2026.'
+};
+const hyperinflationBadgeOwners = new Set([
+  '1044985132777480253',
+  '1155278929943330967',
+  '1016228501721989221',
+  '1240075445114900512'
+]);
 const stopwatchEmoji = '<:RolfBot_stopwatch:1544698730639261748>';
 
 const commandUsage = {
-  balance: '`?balance [ @mention | username | userID ]`',
+  exchange: '`?exchange`',
+  balance: '`?balance [old] [ @mention | username | userID ]`',
   deposit: '`?deposit [ amount | all | half | quarter | debt ]`',
   withdraw: '`?withdraw [ amount | all | half | quarter | debt ]`',
   give: '`?give [ @mention | username | userID ] [ amount | all | half | quarter ]`',
@@ -474,7 +500,7 @@ const commandUsage = {
   collect: '`?collect`',
   slots: '`?slots [ amount | all | half | quarter ]`',
   roulette: '`?roulette [ amount | all | half | quarter ] [ space ]`',
-  leaderboard: '`?leaderboard [ total | wallet | bank | debt | level | stat | list ]`',
+  leaderboard: '`?leaderboard [old] [ total | wallet | bank | debt | level | stat | list ]`',
   shop: '`?shop`',
   achievements: '`?achievements`',
   stats: '`?stats`',
@@ -542,6 +568,11 @@ const adminMessages = {
 };
 
 const helpCommandEntries = [
+  {
+    usage: commandUsage.exchange,
+    description: 'Exchange your entire remaining Alt-Ostmark balance into Neu-Ostmark in your wallet. The first 100,000 converts 1:1, with progressively lower rates above that. Use ?balance old or ?lb old to view remaining Alt-Ostmark.',
+    aliases: exchangeAliases
+  },
   {
     usage: commandUsage.level,
     description: 'View your level and XP, or use `?level rewards` to see all level rewards and `?level info` to see all ways to get XP.',
@@ -1030,7 +1061,7 @@ function createShopComponents(
     if (!owned) {
       priceButton.setEmoji({
         id: currencyEmojiId,
-        name: 'DDR_mark'
+        name: 'NeuOstmark'
       });
     }
     const itemText = [
@@ -1057,7 +1088,7 @@ function createShopComponents(
           const choice = new StringSelectMenuOptionBuilder()
             .setLabel(entry.powerupGroup ? `${option.powerup.durationHours}h` : customRoleOptions.get(option.id))
             .setValue(option.id)
-            .setDescription(`${formatMoney(shopPrice(account, option))} Ostmark${ownedOption ? ' • Owned' : ''}`)
+            .setDescription(`${formatMoney(shopPrice(account, option))} Neu-Ostmark${ownedOption ? ' • Owned' : ''}`)
             .setDefault(option.id === item.id);
           if (option.emoji) choice.setEmoji(option.emoji);
           return choice;
@@ -1123,21 +1154,21 @@ function createEconomyEmbed(message, color, author = message.author) {
   });
 }
 
-function createBalanceFields(wallet, bank, total) {
+function createBalanceFields(wallet, bank, total, emoji = currencyEmoji) {
   return [
     {
       name: '**Wallet:**',
-      value: `${currencyEmoji}${formatMoney(wallet)}`,
+      value: `${emoji}${formatMoney(wallet)}`,
       inline: true
     },
     {
       name: '**Bank:**',
-      value: `${currencyEmoji}${formatMoney(bank)}`,
+      value: `${emoji}${formatMoney(bank)}`,
       inline: true
     },
     {
       name: '**Total:**',
-      value: `${currencyEmoji}${formatMoney(total)}`,
+      value: `${emoji}${formatMoney(total)}`,
       inline: true
     }
   ];
@@ -1410,10 +1441,12 @@ const economyEmbeds = {
     );
   },
 
-  balance(message, target, account, total, leaderboardRank) {
+  balance(message, target, account, total, leaderboardRank, oldCurrency = false) {
+    const balances = oldCurrency ? oldCurrencyBalance(account) : account;
     return createEconomyEmbed(message, account.settings.embedColor, target)
-      .setDescription(`Leaderboard Rank: ${leaderboardRank}`)
-      .addFields(...createBalanceFields(account.wallet, account.bank, total))
+      .setTitle(oldCurrency ? 'Alt-Ostmark Balance' : 'Neu-Ostmark Balance')
+      .setDescription(`Leaderboard Rank: ${leaderboardRank}${oldCurrency && account.oldOstmark?.exchangedAt ? " • Exchanged" : ""}`)
+      .addFields(...createBalanceFields(balances.wallet, balances.bank, total, oldCurrency ? oldCurrencyEmoji : currencyEmoji))
       .setTimestamp();
   },
 
@@ -1428,7 +1461,7 @@ const economyEmbeds = {
     );
   },
 
-  leaderboard(message, account, entries, category, currentPage, totalPages) {
+  leaderboard(message, account, entries, category, currentPage, totalPages, oldCurrency = false) {
     const categoryName = category === 'level' ? 'Level' :
       lbText.categoryNames[category] || formatStatisticName(category);
     const startIndex = currentPage * lbConfig.usersPerPage;
@@ -1448,7 +1481,7 @@ const economyEmbeds = {
               }
               return (
                 `**${rank}.** ${badgePrefix}<@${entry.userId}>` +
-                `${currencyEmoji}` +
+                `${oldCurrency ? oldCurrencyEmoji : currencyEmoji}` +
                 `**${formatMoney(entry.value)}** ${youMarker}`
               );
             })
@@ -1460,7 +1493,7 @@ const economyEmbeds = {
             : lbText.emptyLeaderboard;
     const yourRank = entries.findIndex((entry) => entry.userId === message.author.id) + 1;
     return createEconomyEmbed(message, account.settings.embedColor)
-      .setTitle(`${categoryName} Leaderboard`)
+      .setTitle(`${oldCurrency ? "Alt-Ostmark • " : ""}${categoryName} Leaderboard`)
       .setDescription(description)
       .setFooter({
         text:
@@ -2222,6 +2255,341 @@ const jsonFileCache = new Map();
 const definitionCache = new Map();
 let economyReadCache = { text: null, data: null };
 
+function parseEconomyJson(text) {
+  const exactText = text.replace(/"(?:\\.|[^"\\])*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/g, token => {
+    if (/^-?\d+$/.test(token)) {
+      const value = BigInt(token);
+      if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) return JSON.stringify(token);
+    }
+    return token;
+  });
+  return exactText.trim() ? JSON.parse(exactText) : {};
+}
+
+function oldMoneyInteger(value) {
+  if (value === undefined || value === null) return 0n;
+  if (typeof value === 'string' && /^-?\d+$/.test(value)) return BigInt(value);
+  if (typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value)) return BigInt(value);
+  throw new Error('Invalid Alt-Ostmark balance. Restore or repair the original balance before migrating.');
+}
+
+function oldCurrencyBalance(account) {
+  const wallet = oldMoneyInteger(account?.oldOstmark?.wallet);
+  const bank = oldMoneyInteger(account?.oldOstmark?.bank);
+  return { wallet, bank, total: wallet + bank };
+}
+
+function getCommemorativeBadges(account) {
+  return account?.commemorativeBadges?.includes(hyperinflationBadge.id) ? [hyperinflationBadge] : [];
+}
+
+function grantCommemorativeBadge(account, guildId, userId) {
+  const eligible = guildId === config.guildId && hyperinflationBadgeOwners.has(userId);
+  const badges = new Set(Array.isArray(account.commemorativeBadges) ? account.commemorativeBadges : []);
+  if (eligible) badges.add(hyperinflationBadge.id);
+  else badges.delete(hyperinflationBadge.id);
+  account.commemorativeBadges = [...badges];
+}
+
+function isCurrencyStatistic(key) {
+  const base = key.replace(/^(best_rank_|days_first_)/, '');
+  return isMoneyStatistic(base) || /^(wallet|bank|total|debt)$/.test(base) || /money|wealth|wagered|payout|winnings|net_profit|net_transfers|debt|average_(give|received|deposit|withdrawal|shop_price)|largest_(give|deposit|withdrawal|transfer_received)|missed_daily_income|purchased_role_income|_spent$/.test(base);
+}
+
+function migrateCurrencyData(data) {
+  let changed = data.currencyReform?.version !== currencyReformVersion;
+  if (data.currencyReform?.version > currencyReformVersion) throw new Error('Unsupported currency reform version.');
+  for (const [guildId, guild] of Object.entries(data.guilds || {})) {
+    let guildChanged = false;
+    for (const [userId, account] of Object.entries(guild.users || {})) {
+      if (account.currencyVersion === currencyReformVersion) continue;
+      if (account.currencyVersion > currencyReformVersion) throw new Error('Unsupported account currency version.');
+      const wallet = oldMoneyInteger(account.wallet).toString();
+      const bank = oldMoneyInteger(account.bank).toString();
+      account.oldOstmark = {
+        wallet, bank, originalWallet: wallet, originalBank: bank,
+        migratedAt: Date.now(), exchangedAt: null, achievementStats: {}
+      };
+      for (const [key, value] of Object.entries(account.achievementStats || {})) {
+        if (isCurrencyStatistic(key)) {
+          account.oldOstmark.achievementStats[key] = value;
+          account.achievementStats[key] = 0;
+        }
+      }
+      if (account.statOverrides) {
+        account.oldOstmark.statOverrides = {};
+        for (const [key, value] of Object.entries(account.statOverrides)) {
+          if (isCurrencyStatistic(key)) {
+            account.oldOstmark.statOverrides[key] = value;
+            delete account.statOverrides[key];
+          }
+        }
+      }
+      account.wallet = 0;
+      account.bank = 0;
+      Object.assign(account.achievementStats ||= {}, { highest_wallet_balance: 0, highest_bank_balance: 0, highest_total_wealth: 0, lowest_total_wealth: 0, largest_debt: 0 });
+      account.currencyVersion = currencyReformVersion;
+      if (account.statTracking) {
+        account.oldOstmark.statTracking = JSON.parse(JSON.stringify(account.statTracking));
+        for (const key of ['wealth', 'dayWealth', 'escrow', 'collectionMoney', 'collectionDays']) account.statTracking[key] = 0;
+        for (const key of Object.keys(account.statTracking.daily || {})) {
+          if (isCurrencyStatistic(key)) delete account.statTracking.daily[key];
+        }
+      }
+      grantCommemorativeBadge(account, guildId, userId);
+      changed = true;
+      guildChanged = true;
+    }
+    if (guildChanged && guild.statRankTracking?.leaders) {
+      for (const key of Object.keys(guild.statRankTracking.leaders)) {
+        if (isCurrencyStatistic(key)) delete guild.statRankTracking.leaders[key];
+      }
+    }
+  }
+  if (changed) data.currencyReform = { ...data.currencyReform, version: currencyReformVersion, migratedAt: data.currencyReform?.migratedAt || Date.now() };
+  return changed;
+}
+
+function ensureCurrencyReform(data) {
+  if (!migrateCurrencyData(data)) return;
+  if (fs.existsSync(economyFile)) {
+    const backup = economyFile + '.pre-neu-ostmark.' + Date.now() + '.' + require('crypto').randomUUID() + '.bak';
+    fs.copyFileSync(economyFile, backup, fs.constants.COPYFILE_EXCL);
+  }
+  saveJsonFile(economyFile, data);
+}
+
+function exchangeValue(total) {
+  if (total <= 0n) return 0n;
+  const precision = 1000000000n;
+  let previous = 0n;
+  let scaled = 0n;
+  for (const bracket of exchangeBrackets) {
+    const end = bracket.ceiling === null || total < bracket.ceiling ? total : bracket.ceiling;
+    if (end > previous) scaled += (end - previous) * (precision / bracket.divisor);
+    if (end === total) break;
+    previous = end;
+  }
+  return scaled / precision;
+}
+
+function obsoleteCurrencyMessage(account) {
+  const old = oldCurrencyBalance(account);
+  if (account.wallet + account.bank > 0 || old.total <= 0n) return null;
+  return "Your currency isn't used anymore. use \x60?exchange\x60 to exchange your " + formatMoney(old.total) + ' Alt-Ostmark to Neu-Ostmark.';
+}
+
+function reverseAccidentalExchange(data) {
+  const account = data.guilds?.[config.guildId]?.users?.['1044985132777480253'];
+  const old = account?.oldOstmark;
+  const receipt = old?.receipt;
+  if (!receipt || old.exchangeReversal) return false;
+  if (receipt.oldTotal !== '490018465472829' || receipt.newAmount !== '2677018') return false;
+  const wallet = oldMoneyInteger(receipt.oldWallet);
+  const bank = oldMoneyInteger(receipt.oldBank);
+  if (wallet + bank !== 490018465472829n || oldCurrencyBalance(account).total !== 0n) {
+    throw new Error('Cannot reverse exchange: the saved old balances do not match its receipt.');
+  }
+  const nextWallet = BigInt(account.wallet) - 2677018n;
+  if (nextWallet < BigInt(Number.MIN_SAFE_INTEGER) || nextWallet > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('err too high');
+  }
+  account.wallet = Number(nextWallet);
+  old.wallet = wallet.toString();
+  old.bank = bank.toString();
+  old.exchangedAt = null;
+  old.exchangeReversal = { receipt: { ...receipt }, reversedAt: Date.now() };
+  delete old.receipt;
+  delete old.exchangePlan;
+  return true;
+}
+
+setImmediate(() => {
+  try {
+    const data = loadEconomy();
+    if (reverseAccidentalExchange(data)) saveEconomy(data);
+  } catch (error) {
+    console.error('[EXCHANGE REVERSAL]:', error);
+  }
+});
+
+function exchangeAmount(input, available) {
+  const value = input.trim().toLowerCase();
+  if (value === 'all') return available;
+  if (value === 'half') return available / 2n;
+  if (value === 'quarter') return available / 4n;
+  if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(value)) return null;
+  return BigInt(value.replaceAll(',', ''));
+}
+
+function exchangeQuote(account, amount) {
+  const plan = account.oldOstmark.exchangePlan;
+  const base = BigInt(plan.baseOld);
+  const paid = BigInt(plan.paidNew);
+  const exchanged = BigInt(plan.exchangedOld);
+  if (base <= 0n || exchanged < 0n || paid < 0n ||
+      oldCurrencyBalance(account).total !== base - exchanged ||
+      paid !== exchanged * BigInt(plan.baseNew) / base) {
+    throw new Error('Exchange records are inconsistent. No currency was exchanged.');
+  }
+  if (amount <= 0n || amount > base - exchanged) throw new Error('Enter an amount within your remaining Alt-Ostmark balance.');
+  return (exchanged + amount) * BigInt(plan.baseNew) / base - paid;
+}
+
+async function exchangeCurrency(message, args = []) {
+  if (args.length) return message.reply('Use `?exchange`, then choose an amount with the button.');
+  const data = loadEconomy();
+  if (reverseAccidentalExchange(data)) saveEconomy(data);
+  const account = getAccount(data, message.guild.id, message.author.id, message.member);
+  const balance = oldCurrencyBalance(account);
+  if (balance.total <= 0n) return message.reply('You have no positive Alt-Ostmark balance left to exchange.');
+  if (!account.oldOstmark.exchangePlan) {
+    account.oldOstmark.exchangePlan = {
+      version: 2,
+      baseOld: balance.total.toString(),
+      baseNew: exchangeValue(balance.total).toString(),
+      exchangedOld: '0',
+      paidNew: '0',
+      lockedAt: Date.now()
+    };
+    saveEconomy(data);
+  }
+  const plan = account.oldOstmark.exchangePlan;
+  const token = require('crypto').randomUUID();
+  const buttonId = 'exchange_amount:' + token;
+  const button = disabled => new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(buttonId).setLabel('Choose amount').setStyle(ButtonStyle.Primary).setDisabled(disabled)
+  );
+  const divider = (Number(plan.baseOld) / Number(plan.baseNew)).toLocaleString('en-US', { maximumFractionDigits: 6 });
+  const embed = createEconomyEmbed(message, account.settings.embedColor)
+    .setTitle('Alt-Ostmark → Neu-Ostmark')
+    .setDescription('How much Alt-Ostmark would you like to exchange? There is a confirmation before exchange.')
+    .addFields(
+      { name: 'Remaining Alt-Ostmark', value: oldCurrencyEmoji + formatMoney(balance.total), inline: true },
+      { name: 'Your locked rate', value: '÷ approximately **' + divider + '**\n' + formatMoney(plan.baseOld) + ' Alt-Ostmark → ' + formatMoney(plan.baseNew) + ' Neu-Ostmark', inline: true },
+      { name: 'Divider table', value: [
+        '```',
+        'Alt-Ostmark portion             Divider',
+        'First 100,000                        ÷1',
+        '100,000 - 1 million                 ÷10',
+        '1 million - 1 billion            ÷1,000',
+        '1 billion - 1 trillion       ÷1,000,000',
+        'Above 1 trillion         ÷1,000,000,000',
+        '```',
+      ].join('\n') }
+    );
+  const panel = await message.reply({ embeds: [embed], components: [button(false)] });
+  const collector = panel.createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
+  let busy = false;
+  collector.on('collect', async interaction => {
+    if (interaction.user.id !== message.author.id) {
+      await interaction.reply({ content: 'Only the person who opened this exchange can use it.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    if (interaction.customId !== buttonId) return;
+    if (busy) {
+      await interaction.reply({ content: 'Finish or cancel your current exchange preview first.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
+    busy = true;
+    let submitted;
+    let saved = false;
+    try {
+      const modalId = 'exchange_modal:' + require('crypto').randomUUID();
+      const input = new TextInputBuilder()
+        .setCustomId('alt_amount')
+        .setLabel('How much Alt-Ostmark do you want to exchange?')
+        .setPlaceholder('[ amount | all | half | quarter ]')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(100);
+      await interaction.showModal(new ModalBuilder().setCustomId(modalId).setTitle('Exchange Alt-Ostmark')
+        .addComponents(new ActionRowBuilder().addComponents(input)));
+      submitted = await interaction.awaitModalSubmit({
+        filter: event => event.customId === modalId && event.user.id === message.author.id,
+        time: 120000
+      }).catch(() => null);
+      if (!submitted) return;
+      await submitted.deferReply({ flags: MessageFlags.Ephemeral });
+      const quoteData = loadEconomy();
+      const quoted = getAccount(quoteData, message.guild.id, message.author.id, message.member);
+      const available = oldCurrencyBalance(quoted).total;
+      const amount = exchangeAmount(submitted.fields.getTextInputValue('alt_amount'), available);
+      if (amount === null || amount <= 0n || amount > available) {
+        await submitted.editReply('Enter a positive whole amount within your balance, or `all`, `half`, or `quarter`.');
+        return;
+      }
+      const payout = exchangeQuote(quoted, amount);
+      if (payout <= 0n) {
+        await submitted.editReply('That amount would give you 0 Neu-Ostmark. Choose a larger amount. Nothing was exchanged.');
+        return;
+      }
+      const snapshot = JSON.stringify([quoted.oldOstmark.wallet, quoted.oldOstmark.bank, quoted.oldOstmark.exchangePlan]);
+      const confirmId = 'exchange_confirm:' + require('crypto').randomUUID();
+      const cancelId = 'exchange_cancel:' + require('crypto').randomUUID();
+      const preview = await submitted.editReply({
+        content: oldCurrencyEmoji + formatMoney(amount) + ' Alt-Ostmark → ' + currencyEmoji + formatMoney(payout) + ' Neu-Ostmark.\nConfirm this exchange? Nothing has been exchanged yet.',
+        components: [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(confirmId).setLabel('Confirm exchange').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(cancelId).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
+        )]
+      });
+      const choice = await preview.awaitMessageComponent({
+        componentType: ComponentType.Button,
+        filter: event => event.user.id === message.author.id && [confirmId, cancelId].includes(event.customId),
+        time: 60000
+      }).catch(() => null);
+      if (!choice) {
+        await submitted.editReply({ content: 'Exchange preview expired. Nothing was exchanged.', components: [] });
+        return;
+      }
+      await choice.deferUpdate();
+      if (choice.customId === cancelId) {
+        await submitted.editReply({ content: 'Exchange cancelled. Nothing was exchanged.', components: [] });
+        return;
+      }
+      const freshData = loadEconomy();
+      const fresh = getAccount(freshData, message.guild.id, message.author.id, message.member);
+      const old = fresh.oldOstmark;
+      if (JSON.stringify([old.wallet, old.bank, old.exchangePlan]) !== snapshot || exchangeQuote(fresh, amount) !== payout) {
+        await submitted.editReply({ content: 'Your old balance changed after this preview. Choose an amount again for an updated preview. Nothing was exchanged.', components: [] });
+        return;
+      }
+      const nextWallet = BigInt(fresh.wallet) + payout;
+      const nextTotal = nextWallet + BigInt(fresh.bank);
+      if (nextWallet > BigInt(Number.MAX_SAFE_INTEGER) || nextWallet < BigInt(Number.MIN_SAFE_INTEGER) ||
+          nextTotal > BigInt(Number.MAX_SAFE_INTEGER) || nextTotal < BigInt(Number.MIN_SAFE_INTEGER)) {
+        await submitted.editReply({ content: 'This exchange exceeds the supported balance limit. Nothing was exchanged.', components: [] });
+        return;
+      }
+      const remaining = oldCurrencyBalance(fresh);
+      const fromWallet = remaining.wallet > 0n ? (remaining.wallet < amount ? remaining.wallet : amount) : 0n;
+      old.wallet = amount === remaining.total ? '0' : (remaining.wallet - fromWallet).toString();
+      old.bank = amount === remaining.total ? '0' : (remaining.bank - (amount - fromWallet)).toString();
+      old.exchangePlan.exchangedOld = (BigInt(old.exchangePlan.exchangedOld) + amount).toString();
+      old.exchangePlan.paidNew = (BigInt(old.exchangePlan.paidNew) + payout).toString();
+      if (amount === remaining.total) old.exchangedAt = Date.now();
+      if (!Array.isArray(old.exchanges)) old.exchanges = [];
+      old.exchanges.push({ interactionId: choice.id, oldAmount: amount.toString(), newAmount: payout.toString(), exchangedAt: Date.now() });
+      fresh.wallet = Number(nextWallet);
+      saveEconomy(freshData);
+      saved = true;
+      await submitted.editReply({ content: 'Exchanged ' + oldCurrencyEmoji + formatMoney(amount) + ' Alt-Ostmark for ' + currencyEmoji + formatMoney(payout) + ' Neu-Ostmark.\nRemaining Alt-Ostmark: ' + formatMoney(remaining.total - amount) + '.', components: [] });
+      collector.stop('exchanged');
+    } catch (error) {
+      console.error('[EXCHANGE]:', error);
+      const content = saved ? 'Your exchange was saved. Check `?balance` and `?balance old`.' : 'The exchange could not be completed. Reopen `?exchange` and try again.';
+      if (submitted?.deferred || submitted?.replied) await submitted.editReply({ content, components: [] }).catch(() => {});
+      else if (!interaction.replied && !interaction.deferred) await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
+    } finally {
+      busy = false;
+    }
+  });
+  collector.on('end', () => panel.edit({ components: [button(true)] }).catch(() => {}));
+  return panel;
+}
+
+
 function readEconomyView() {
   if (!fs.existsSync(economyFile)) {
     economyReadCache = { text: null, data: null };
@@ -2229,8 +2597,9 @@ function readEconomyView() {
   }
   const text = readJsonText(economyFile);
   if (economyReadCache.text !== text || !economyReadCache.data) {
-    const data = text.trim() ? JSON.parse(text) : {};
-    economyReadCache = { text, data };
+    const data = parseEconomyJson(text);
+    ensureCurrencyReform(data);
+    economyReadCache = { text: readJsonText(economyFile), data };
   }
   return economyReadCache.data;
 }
@@ -2287,10 +2656,11 @@ function loadEconomy() {
   }
   try {
     const rawData = readJsonText(economyFile);
-    const data = rawData.trim() ? JSON.parse(rawData) : {};
+    const data = parseEconomyJson(rawData);
     if (!data.guilds || typeof data.guilds !== 'object') {
       data.guilds = {};
     }
+    ensureCurrencyReform(data);
     for (const [key, def] of Object.entries(data.statCatalog || {})) {
       if (/^(shop_item_|shop_category_|achievements_)/.test(key) && def && typeof def.label === 'string') {
         addStat(key, def.label.slice(0, 90), def.type === 'money' ? 'money' : 'count');
@@ -2603,6 +2973,7 @@ function readAchievements() {
         description: achievement.description.trim(),
         imageUrl,
         hidden: achievement.hidden === true,
+        obtainable: achievement.obtainable !== false,
         showProgress: achievement.show_progress === true,
         difficulty: typeof achievement.difficulty === 'string' ? achievement.difficulty.trim() : '',
         difficultyEmoji: typeof achievement.difficulty === 'string'
@@ -2680,6 +3051,8 @@ function getAccount(data, guildId, userId, member, xpUsers) {
     data.guilds[guildId].users[userId] = {
       wallet: 0,
       bank: 0,
+      currencyVersion: currencyReformVersion,
+      oldOstmark: { wallet: '0', bank: '0', originalWallet: '0', originalBank: '0', exchangedAt: null },
       lastWorkAt: 0,
       lastCollectAt: 0,
       incomeRoleClaimsDate: '',
@@ -2696,6 +3069,7 @@ function getAccount(data, guildId, userId, member, xpUsers) {
     };
   }
   const account = data.guilds[guildId].users[userId];
+  grantCommemorativeBadge(account, guildId, userId);
   if (typeof account.wallet !== 'number') {
     account.wallet = 0;
   }
@@ -2925,6 +3299,7 @@ function unlockAchievements(achievements, account) {
     foundAchievement = false;
     for (const achievement of achievements) {
       if (
+        achievement.obtainable === false ||
         unlockedIds.has(achievement.id) ||
         revokedIds.has(achievement.id) ||
         getAchievementProgress(achievement, account) < achievement.condition.target
@@ -3015,8 +3390,17 @@ function getLeaderboardValue(account, category) {
   return wallet + bank;
 }
 
-function getLeaderboardEntries(data, guildId, category) {
+function getLeaderboardEntries(data, guildId, category, oldCurrency = false) {
   const users = data.guilds[guildId]?.users || {};
+  if (oldCurrency) {
+    return Object.entries(users).map(([userId, account]) => {
+      const balances = oldCurrencyBalance(account);
+      return { userId, value: category === 'wallet' ? balances.wallet : category === 'bank' ? balances.bank : balances.total };
+    }).filter(entry => category !== 'debt' || entry.value < 0n).sort((a, b) => {
+      const order = a.value === b.value ? 0 : a.value < b.value ? -1 : 1;
+      return (category === 'debt' ? order : -order) || a.userId.localeCompare(b.userId);
+    });
+  }
   if (category === 'messages_sent' || category === 'vc_time') {
     return [...new Set([...Object.keys(users), ...activityStore.getUserIds(guildId)])]
       .map(userId => {
@@ -3079,6 +3463,8 @@ function parseMoneyAmount(input) {
 }
 
 function formatMoney(amount) {
+  if (typeof amount === 'bigint') return moneyFormatter.format(amount);
+  if (typeof amount === 'string' && /^-?\d+$/.test(amount)) return moneyFormatter.format(BigInt(amount));
   return moneyFormatter.format(Math.floor(amount));
 }
 
@@ -4063,6 +4449,8 @@ async function showLevel(message, args = []) {
 
 async function showBalance(message, args = []) {
   try {
+    const oldCurrency = args.some(arg => arg.toLowerCase() === 'old');
+    args = args.filter(arg => arg.toLowerCase() !== 'old');
     const mentionedUser = message.mentions.users.first();
     const mentionedMember = message.mentions.members.first();
     if (args.length > 1 || (args.length === 1 && (!mentionedUser || !mentionedMember))) {
@@ -4082,11 +4470,11 @@ async function showBalance(message, args = []) {
       account = getAccount(economyData, message.guild.id, target.id, targetMember);
       saveEconomy(economyData);
     }
-    const total = account.wallet + account.bank;
-    const totalLeaderboardEntries = getLeaderboardEntries(economyData, message.guild.id, 'total');
+    const total = oldCurrency ? oldCurrencyBalance(account).total : account.wallet + account.bank;
+    const totalLeaderboardEntries = getLeaderboardEntries(economyData, message.guild.id, 'total', oldCurrency);
     const leaderboardRank =
       totalLeaderboardEntries.findIndex((entry) => entry.userId === target.id) + 1;
-    const embed = economyEmbeds.balance(message, target, account, total, leaderboardRank);
+    const embed = economyEmbeds.balance(message, target, account, total, leaderboardRank, oldCurrency);
     return message.reply({
       embeds: [embed]
     });
@@ -4294,9 +4682,9 @@ async function waitForCustomBadgeModal(interaction) {
 }
 
 function getLeaderboardBadges(account, achievements) {
-  const unlockedIds = new Set([...(account?.achievements || []), ...(account?.levelBadges || []), ...getCustomBadges(account).map(badge => badge.id)]);
+  const unlockedIds = new Set([...(account?.achievements || []), ...(account?.levelBadges || []), ...getCustomBadges(account).map(badge => badge.id), ...getCommemorativeBadges(account).map(badge => badge.id)]);
   const hiddenIds = new Set(Array.isArray(account?.settings?.hiddenBadgeIds) ? account.settings.hiddenBadgeIds : []);
-  return [...achievements, ...levelRewards.badges, ...getCustomBadges(account)]
+  return [...achievements, ...levelRewards.badges, ...getCustomBadges(account), ...getCommemorativeBadges(account)]
     .filter((achievement) => unlockedIds.has(achievement.id) && achievement.badge && (achievement.milestone ? levelRewards.selectedBadge(account) === achievement.id : !hiddenIds.has(achievement.id)))
     .map((achievement) => achievement.badge)
     .join('');
@@ -4431,6 +4819,11 @@ async function showLeaderboardCategories(message) {
 
 async function showLeaderboard(message, args = []) {
   try {
+    const oldCurrency = args.some(arg => arg.toLowerCase() === 'old');
+    args = args.filter(arg => arg.toLowerCase() !== 'old');
+    if (oldCurrency && args.length && !['total', 'wallet', 'cash', 'bank', 'debt'].includes(args.join(' ').toLowerCase())) {
+      return message.reply('Use `?lb old [total | wallet | bank | debt]` for Alt-Ostmark.');
+    }
     loadEconomy();
     const requestedCategory = args.join(' ').trim().toLowerCase().replace(/[\s-]+/g, '_');
     if (requestedCategory === 'list' || requestedCategory === 'stats') {
@@ -4451,7 +4844,7 @@ async function showLeaderboard(message, args = []) {
     saveEconomy(economyData);
     const entries = category === 'level'
       ? getLevelLeaderboardEntries()
-      : getLeaderboardEntries(economyData, message.guild.id, category);
+      : getLeaderboardEntries(economyData, message.guild.id, category, oldCurrency);
     const achievements = fs.existsSync(achievementsFile) ? loadAchievements() : [];
     const guildUsers = economyData.guilds[message.guild.id]?.users || {};
     for (const entry of entries) {
@@ -4465,7 +4858,9 @@ async function showLeaderboard(message, args = []) {
       entries,
       category,
       currentPage,
-      totalPages
+      totalPages,
+
+      oldCurrency
     );
     const components = totalPages > 1 ? [createLeaderboardButtons(currentPage, totalPages)] : [];
     const leaderboardMessage = await message.reply({
@@ -4530,7 +4925,9 @@ async function showLeaderboard(message, args = []) {
           entries,
           category,
           currentPage,
-          totalPages
+          totalPages,
+
+          oldCurrency
         );
         await pageInteraction.update({
           embeds: [updatedEmbed],
@@ -5666,6 +6063,13 @@ async function showShop(message, args) {
         if (!interaction.customId.startsWith('economy_shop_buy:')) {
           return;
         }
+        const purchaseData = loadEconomy();
+        const purchaseAccount = getAccount(purchaseData, message.guild.id, message.author.id, message.member);
+        const currencyNotice = obsoleteCurrencyMessage(purchaseAccount);
+        if (currencyNotice) {
+          await interaction.reply({ content: currencyNotice, flags: MessageFlags.Ephemeral });
+          return;
+        }
         const requestedItemId = interaction.customId.slice('economy_shop_buy:'.length);
         let customEmoji = null;
         if (requestedItemId === 'custom_badge') {
@@ -5711,6 +6115,11 @@ async function showShop(message, args) {
           await interaction.reply({
             embeds: [alreadyOwnedEmbed]
           });
+          return;
+        }
+        const purchaseNotice = obsoleteCurrencyMessage(updatedAccount);
+        if (item.price > 0 && purchaseNotice) {
+          await interaction.reply({ content: purchaseNotice, flags: MessageFlags.Ephemeral });
           return;
         }
         if (updatedAccount.wallet < item.price) {
@@ -5808,6 +6217,17 @@ async function showShop(message, args) {
 
 const badgePageSize = 4;
 
+function badgeAwardDescription(badge) {
+  if (badge.milestone) return 'Reaching level ' + badge.level + '.';
+  if (badge.id === 'custom_badge') return 'Purchasing a custom badge from \x60?shop\x60.';
+  const description = String(badge.description || '').trim().replace(/^>\s*/gm, '');
+  const verbs = { reach: 'Reaching', have: 'Having', own: 'Owning', earn: 'Earning', win: 'Winning', lose: 'Losing', get: 'Getting', be: 'Being', become: 'Becoming', collect: 'Collecting', give: 'Giving', receive: 'Receiving', rob: 'Robbing', work: 'Working', beg: 'Begging', play: 'Playing', buy: 'Buying', purchase: 'Purchasing', complete: 'Completing', unlock: 'Unlocking', spend: 'Spending', deposit: 'Depositing', withdraw: 'Withdrawing', use: 'Using', send: 'Sending', fail: 'Failing', succeed: 'Succeeding', escape: 'Escaping', survive: 'Surviving', hit: 'Hitting', win: 'Winning' };
+  const first = description.match(/^([A-Za-z]+)\b/);
+  if (first && verbs[first[1].toLowerCase()]) return verbs[first[1].toLowerCase()] + description.slice(first[1].length);
+  if (/^\w+ing\b/i.test(description)) return description;
+  return 'Fulfilling this requirement: ' + (description || 'Unlock this badge.');
+}
+
 function createBadgeSettingsComponents(account, badges, page, disableAll = false) {
   const text = {
     title: '## Badge Settings',
@@ -5818,7 +6238,8 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
       achievement: '🏆 Achievement Badge',
       milestone: '📈 Leveling Milestone Badge',
       role: '🎭 Role Badge',
-      custom: '✨ Custom Badge'
+      custom: '✨ Custom Badge',
+      commemorative: '📉 Commemorative Badge'
     },
     locked: '🔒 Locked',
     shown: '🔓 Unlocked\n✔️Shown',
@@ -5838,7 +6259,8 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
   const ownedIds = new Set([
     ...(account.achievements || []),
     ...(account.levelBadges || []),
-    ...getCustomBadges(account).map(badge => badge.id)
+    ...getCustomBadges(account).map(badge => badge.id),
+    ...getCommemorativeBadges(account).map(badge => badge.id)
   ]);
   const selected = levelRewards.selectedBadge(account);
   const pageBadges = badges.slice(
@@ -5862,9 +6284,7 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
     );
     const secret = badge.hidden && !owned;
     const type = milestone ? 'milestone' : badge.type || 'achievement';
-    const description = milestone
-      ? `Reach level ${badge.level}.`
-      : badge.description || 'err no desc';
+    const description = badgeAwardDescription(badge);
 
     const status = !owned
       ? text.locked
@@ -5876,12 +6296,16 @@ function createBadgeSettingsComponents(account, badges, page, disableAll = false
       ? [
           '### 🔒 **Hidden Badge**',
           `> ${text.types[type] || text.types.achievement}`,
-          '> **Unlock its achievement to discover it.**',
+          '-# awarded for',
+          '**Unlock its achievement to discover it.**',
+          `> -# **${badge.obtainable === false ? 'Unobtainable' : 'Obtainable'}**`,
           `> -# **${text.locked}**`
         ].join('\n')
       : [
           `### ${badge.badge} **${badge.name}**`,
-          `> **${description}**`,
+          '-# awarded for',
+          `**${description}**`,
+          `> -# **${badge.obtainable === false ? 'Unobtainable' : 'Obtainable'}**`,
           ...status.split('\n').map(line => `> -# **${line}**`),
           `> -# **${text.types[type] || text.types.achievement}**`,
         ].join('\n');
@@ -6018,7 +6442,7 @@ async function showBadgeSettings(message) {
     const data = loadEconomy();
     const account = getAccount(data, message.guild.id, message.author.id, message.member);
     if (!Array.isArray(account.settings.hiddenBadgeIds)) account.settings.hiddenBadgeIds = [];
-    badges = [...loadAchievements().filter(achievement => achievement.badge), ...levelRewards.badges, ...getCustomBadges(account)];
+    badges = [...loadAchievements().filter(achievement => achievement.badge), ...levelRewards.badges, ...getCustomBadges(account), hyperinflationBadge];
     return { data, account };
   };
   let page = 0;
@@ -6050,7 +6474,7 @@ async function showBadgeSettings(message) {
       else if (interaction.customId === 'badge_next') page = Math.min(Math.max(0, Math.ceil(badges.length / badgePageSize) - 1), page + 1);
       else if (interaction.customId.startsWith('badge_toggle:')) {
         const id = interaction.customId.slice('badge_toggle:'.length);
-        if ([...account.achievements, ...(account.levelBadges || []), ...getCustomBadges(account).map(badge => badge.id)].includes(id) && badges.some(badge => badge.id === id && badge.badge)) {
+        if ([...account.achievements, ...(account.levelBadges || []), ...getCustomBadges(account).map(badge => badge.id), ...getCommemorativeBadges(account).map(badge => badge.id)].includes(id) && badges.some(badge => badge.id === id && badge.badge)) {
           if (!levelRewards.toggleBadge(account, id)) {
             const hidden = new Set(account.settings.hiddenBadgeIds);
             if (hidden.has(id)) hidden.delete(id);
@@ -6659,6 +7083,19 @@ async function handleEconomyCommandInternal(message) {
       embeds: [embed]
     });
     return true;
+  }
+  if (exchangeAliases.has(cmdName)) {
+    pendingCommandStatistics.set(message, cmdKey);
+    return completeEconomyCommand(message, () => exchangeCurrency(message, commandParts));
+  }
+  if (['slots', 'roulette', 'give', 'deposit', 'withdraw'].includes(cmdKey)) {
+    const data = loadEconomy();
+    const account = getAccount(data, message.guild.id, message.author.id, message.member);
+    const notice = obsoleteCurrencyMessage(account);
+    if (notice) {
+      await message.reply(notice);
+      return true;
+    }
   }
   pendingCommandStatistics.set(message, cmdKey);
   if (balanceAliases.has(cmdName)) {
